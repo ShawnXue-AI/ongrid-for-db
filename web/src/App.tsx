@@ -129,18 +129,18 @@ export default function App() {
               Redirect kept for any operator-bookmarked old URL. */}
           <Route path="marketplace" element={<Navigate to="/skills?tab=install" replace />} />
           <Route path="preferences" element={<SettingsPreferences />} />
-          <Route path="audit" element={<AdminAuditLog />} />
         </Route>
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Navigate to="users" replace />} />
           <Route path="users" element={<AdminUsers />} />
           <Route path="orgs" element={<AdminOrgs />} />
+          <Route path="audit" element={<AdminAuditLog />} />
         </Route>
-        {/* Audit log moved under Settings (2026-05-25 — it's an
-            infrequently-accessed admin page, so it no longer earns a slot
-            in the always-visible sidebar footer; it lives as a Settings
-            tab now). Old /audit links redirect so bookmarks keep working. */}
-        <Route path="/audit" element={<Navigate to="/settings/audit" replace />} />
+        {/* Audit log lives under the Admin (Users & Orgs) section — it's
+            platform governance ("who did what"), grouped with users/orgs,
+            not in the always-visible sidebar footer. Old /audit links
+            redirect so bookmarks keep working. */}
+        <Route path="/audit" element={<Navigate to="/admin/audit" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

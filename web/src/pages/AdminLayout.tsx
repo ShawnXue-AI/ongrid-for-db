@@ -11,14 +11,16 @@
 // Routes mounted under /admin/*:
 //   /admin/users — system users (superuser-only writes)
 //   /admin/orgs — orgs + memberships
+//   /admin/audit — audit log (who did what, when)
 //   /admin/webshell — WebSSH session audit + admin-kill
 //
-// Future additions: /admin/audit, /admin/roles, /admin/security.
+// Future additions: /admin/roles, /admin/security.
 import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   Building2,
   Loader2,
+  ScrollText,
   Shield,
   Users as UsersIcon,
 } from 'lucide-react';
@@ -39,6 +41,7 @@ function railItems(): RailItem[] {
   return [
     { to: 'users', icon: UsersIcon, label: tr('用户', 'Users'), hint: tr('系统用户与系统角色', 'System users and system role') },
     { to: 'orgs', icon: Building2, label: tr('组织', 'Orgs'), hint: tr('组织与组织成员管理', 'Orgs and org memberships') },
+    { to: 'audit', icon: ScrollText, label: tr('审计日志', 'Audit log'), hint: tr('谁在何时做了什么', 'Who did what, when') },
   ];
 }
 
