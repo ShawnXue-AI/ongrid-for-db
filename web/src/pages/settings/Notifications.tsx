@@ -52,10 +52,10 @@ const TYPE_CARDS: TypeMeta[] = [
     type: 'feishu',
     group: 'cn',
     labelZh: '飞书',
-    labelEn: 'Feishu',
+    labelEn: 'Larksuite',
     icon: MessageSquareShare,
     hintZh: '飞书自定义机器人 webhook，支持签名校验。',
-    hintEn: 'Feishu custom-bot webhook; supports signature verification.',
+    hintEn: 'Larksuite custom-bot webhook; supports signature verification.',
     endpointPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxx',
   },
   {
@@ -125,7 +125,7 @@ function orderCardsByLocale(locale: string): TypeMeta[] {
 
 type Toast = { kind: 'ok' | 'err'; text: string } | null;
 
-export default function SettingsCommunications() {
+export default function SettingsNotifications() {
   const { tr, locale } = useI18n();
   const orderedCards = useMemo(() => orderCardsByLocale(locale), [locale]);
   const [items, setItems] = useState<Channel[]>([]);

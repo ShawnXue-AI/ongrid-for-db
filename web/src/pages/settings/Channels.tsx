@@ -1,8 +1,11 @@
-// IM apps admin. CRUD for Feishu / DingTalk bot
-// registrations. Each row drives one long-connection (stream mode)
-// or one webhook endpoint that the platform calls. List view is
-// table-shaped (consistent with the Users / Edges page); the
-// create / edit form is a Modal.
+// Channels — two-way IM bot admin. CRUD for Larksuite / DingTalk /
+// Telegram / Slack bot registrations. Each row drives one long-connection
+// (stream mode) or one webhook endpoint that the platform calls. List view
+// is table-shaped (consistent with the Users / Edges page); the
+// create / edit form is a Modal. Note: this page was previously called
+// "IMApps"/"Bots"; the URL+labels were unified to "Channels" to match
+// the two-way semantic and pair with Settings → Notifications (one-way
+// alert delivery).
 
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw, Loader2, Pencil, Trash2, Eye, EyeOff, MessagesSquare, MessageSquareShare, Send, Slack } from 'lucide-react';
@@ -26,10 +29,10 @@ import { useI18n } from '@/i18n/locale';
 const PROVIDER_META: Record<IMProvider, { labelZh: string; labelEn: string; icon: typeof MessageSquareShare; hintZh: string; hintEn: string }> = {
   feishu: {
     labelZh: '飞书',
-    labelEn: 'Feishu',
+    labelEn: 'Larksuite',
     icon: MessageSquareShare,
     hintZh: '飞书开放平台应用。建议走 stream 模式（长连接）— manager 主动 dial 出去，无需公网回调。',
-    hintEn: 'Feishu Open Platform app. Stream mode is the default — manager dials out, no public webhook URL required.',
+    hintEn: 'Larksuite Open Platform app. Stream mode is the default — manager dials out, no public webhook URL required.',
   },
   dingtalk: {
     labelZh: '钉钉',
@@ -54,7 +57,7 @@ const PROVIDER_META: Record<IMProvider, { labelZh: string; labelEn: string; icon
   },
 };
 
-export default function SettingsIMApps() {
+export default function SettingsChannels() {
   const { tr } = useI18n();
   const [items, setItems] = useState<IMApp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,7 +92,7 @@ export default function SettingsIMApps() {
 
   return (
     <>
-      {/* Same shell as /settings/llm and /settings/communications:
+      {/* Same shell as /settings/llm and /settings/notifications:
           intro panel up top describing what this page does, then a
           right-aligned toolbar + table (or EmptyState) below. The
           surrounding SettingsLayout already provides the page-level
@@ -102,7 +105,7 @@ export default function SettingsIMApps() {
           </div>
           {tr(
             '配置飞书 / 钉钉 / Telegram / Slack 机器人，群里 @bot 或私聊就能开多轮会话。推荐 ',
-            'Configure Feishu / DingTalk / Telegram / Slack bots so users can @bot in a group (or DM) and get multi-turn conversations. ',
+            'Configure Larksuite / DingTalk / Telegram / Slack bots so users can @bot in a group (or DM) and get multi-turn conversations. ',
           )}
           <b>{tr('stream 模式', 'Stream mode')}</b>
           {tr(
@@ -366,7 +369,7 @@ function IMAppEditor({
               disabled={!isCreate}
               className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
             >
-              <option value="feishu">飞书 / Feishu</option>
+              <option value="feishu">飞书 / Larksuite</option>
               <option value="dingtalk">钉钉 / DingTalk</option>
               <option value="telegram">Telegram</option>
               <option value="slack">Slack</option>
@@ -399,7 +402,7 @@ function IMAppEditor({
           />
         </Field>
 
-        <Field label="app_id" hint={tr('飞书 app_id (cli_xxx) / 钉钉 AppKey / Telegram bot 用户名 / Slack workspace team_id (T…)', 'Feishu app_id (cli_xxx) / DingTalk AppKey / Telegram bot username / Slack workspace team_id (T…)')}>
+        <Field label="app_id" hint={tr('飞书 app_id (cli_xxx) / 钉钉 AppKey / Telegram bot 用户名 / Slack workspace team_id (T…)', 'Larksuite app_id (cli_xxx) / DingTalk AppKey / Telegram bot username / Slack workspace team_id (T…)')}>
           <input
             value={appID}
             onChange={(e) => setAppID(e.target.value)}
@@ -506,7 +509,7 @@ function IMAppEditor({
 
         {mode === 'webhook' && provider === 'feishu' && (
           <div className="grid grid-cols-2 gap-3">
-            <Field label="verify_token" hint={tr('飞书事件订阅 verification token（可选）', 'Feishu event subscription verification token (optional)')}>
+            <Field label="verify_token" hint={tr('飞书事件订阅 verification token（可选）', 'Larksuite event subscription verification token (optional)')}>
               <input
                 value={verifyToken}
                 onChange={(e) => setVerifyToken(e.target.value)}

@@ -1711,7 +1711,7 @@ function KindPicker({
 // save, so storage shape is unchanged.)
 
 // CHANNEL_TYPE_LABEL maps backend enum strings to friendly Chinese
-// names. Mirrors the labels in pages/settings/Communications.tsx so a
+// names. Mirrors the labels in pages/settings/Notifications.tsx so a
 // rule editor and the channel manager show the same words.
 const CHANNEL_TYPE_LABEL_ZH: Record<string, string> = {
   feishu: '飞书',
@@ -1755,7 +1755,7 @@ const CHANNEL_TYPE_ORDER: Array<{ type: string; icon: typeof Webhook }> = [
 //
 // Per-row UX:
 //   - Header: type icon + Chinese label + instance count + 「配置 ↗」
-//     deep-link to /settings/communications.
+//     deep-link to /settings/notifications.
 //   - Toggle the header checkbox to bulk-select / deselect every
 //     instance of that type. Single-instance types add the lone id;
 //     multi-instance types add ALL ids (operator can refine via the
@@ -1872,7 +1872,7 @@ function ChannelsField({
                 <div className="ml-auto flex items-center gap-2 text-[10px]">
                   {noInstances ? (
                     <Link
-                      to="/settings/communications"
+                      to="/settings/notifications"
                       className="text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
                     >
                       {tr('前往配置 ↗', 'Configure ↗')}
@@ -1993,7 +1993,7 @@ function ChannelsField({
             : tr('未勾选 — 由全局级别/范围筛选自动路由', "None selected — routed by global severity / scope filters")}
         </span>
         <Link
-          to="/settings/communications"
+          to="/settings/notifications"
           className="text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
         >
           {tr('管理通道 →', 'Manage channels →')}
