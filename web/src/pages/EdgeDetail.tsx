@@ -874,8 +874,8 @@ function PluginsTab({ edgeId }: { edgeId: number }) {
     <div className="space-y-4">
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-[12px] text-zinc-400">
         {tr(
-          'ongrid-edge 按 plugin runtime 模型组织能力。manager 推下来的 enabled + spec 由边端 supervisor 渲染成 plugin 原生 yaml（promtail.yaml / otelcol.yaml）后启停 subprocess。状态字段在 health 上报通道接通前先按 enabled 推断，crashed/restart_count 待边端 health snapshot 上报后再露出。',
-          'ongrid-edge organizes capabilities under the plugin runtime model. enabled + spec pushed from manager are rendered by the edge supervisor into the plugin\'s native yaml (promtail.yaml / otelcol.yaml) and the subprocess is started/stopped. Status is inferred from enabled until health-channel snapshots land; crashed / restart_count surface later.',
+          'ongrid-edge 按 plugin runtime 模型组织能力。manager 推下来的 enabled + spec 由边端 supervisor 渲染成 plugin 原生 yaml（promtail.yaml / otelcol.yaml）后启停 subprocess。状态来自边端心跳上报的 health snapshot：running / crashed / starting / stopped，crashed 时展示原因（如二进制缺失）与重启次数；边端离线或旧版本未上报时按 enabled 推断。',
+          'ongrid-edge organizes capabilities under the plugin runtime model. enabled + spec pushed from manager are rendered by the edge supervisor into the plugin\'s native yaml (promtail.yaml / otelcol.yaml) and the subprocess is started/stopped. Status comes from the edge\'s heartbeat health snapshot: running / crashed / starting / stopped — crashed shows the reason (e.g. missing binary) and restart count; falls back to inferring from enabled when the edge is offline or runs an older agent.',
         )}
       </div>
 
@@ -960,14 +960,27 @@ function PluginCard({
   // of the plugin row's enabled flag — show that explicitly so operators
   // don't think toggling it does anything.
   const isMetricsBuiltin = row.plugin_name === 'metrics';
-  // State pill: until health snapshot lands we infer from enabled.
-  // running = enabled, stopped = disabled. crashed will hook in later.
-  const stateLabel = isMetricsBuiltin ? 'built-in' : row.enabled ? 'running' : 'stopped';
+  // State pill: prefer the live heartbeat-reported health (running / crashed
+  // / starting / stopped). Falls back to inferring from enabled when the edge
+  // hasn't reported yet (offline / pre-introduction agent). This is what
+  // surfaces "logs: crashed — binary missing" instead of a silent failure.
+  const health = row.health;
+  const stateLabel = isMetricsBuiltin
+    ? 'built-in'
+    : health?.state
+      ? health.state
+      : row.enabled
+        ? 'running'
+        : 'stopped';
   const stateStyle = isMetricsBuiltin
     ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
-    : row.enabled
-      ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
-      : 'bg-zinc-700/40 text-zinc-400 ring-zinc-600';
+    : stateLabel === 'crashed'
+      ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30'
+      : stateLabel === 'running'
+        ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
+        : stateLabel === 'starting'
+          ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
+          : 'bg-zinc-700/40 text-zinc-400 ring-zinc-600';
 
   const toggle = async () => {
     await onSave({ enabled: !row.enabled, spec: row.spec });
@@ -1005,6 +1018,17 @@ function PluginCard({
                   )
                 : meta.hint}
             </div>
+            {!isMetricsBuiltin && health?.last_error && (
+              <div
+                className="mt-0.5 truncate text-[11px] text-rose-400"
+                title={health.last_error}
+              >
+                {health.last_error}
+                {health.restart_count
+                  ? tr(` · 重启 ${health.restart_count} 次`, ` · ${health.restart_count} restarts`)
+                  : ''}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">

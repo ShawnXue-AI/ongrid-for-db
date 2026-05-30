@@ -186,12 +186,51 @@ else
 fi
 rm -f "$TMP_HOOK"
 
+# --- bundled plugin binaries (ADR-015) --------------------------------------
+#
+# The agent's plugin supervisor runs promtail (logs), node_exporter
+# (hostmetrics), process_exporter (procmetrics) and otelcol-contrib (traces)
+# as subprocesses, expecting them under ${APPLY_HOOK_DIR}. The old curl-pipe
+# installer fetched ONLY the agent binary, so every edge enrolled via the UI
+# one-liner came up with an empty plugin dir → all plugins "crashed: binary
+# missing" → silent empty Logs / Monitor / Traces. (install-edge.sh, run from
+# an extracted tarball, did install them — but nobody uses that for
+# enrollment.) Fetch them here from the same /edge/ static path the agent
+# binary came from. Best-effort per binary: a missing one only disables its
+# plugin, surfaced loudly in the self-check below.
+fetch_plugin_bin() {
+    local name="$1" dest="${APPLY_HOOK_DIR}/$1"
+    local url="https://${SERVER_HTTP_ADDR}/edge/${name}-${OS}-${ARCH}"
+    local tmp
+    tmp=$(mktemp "/tmp/${name}.XXXXXX")
+    if curl -fLk --retry 3 --retry-delay 2 -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
+        install -m 0755 -o root -g root "$tmp" "$dest"
+        log_info "installed plugin binary: ${name}"
+    else
+        log_warn "could not fetch ${url}; the ${name} plugin will not run until present"
+    fi
+    rm -f "$tmp"
+}
+for pbin in promtail node_exporter process_exporter otelcol-contrib; do
+    fetch_plugin_bin "$pbin"
+done
+
 # --- service user ------------------------------------------------------------
 
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     log_info "creating system user ${SERVICE_USER}"
     useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
+
+# Grant log-read group membership so the logs plugin (promtail) can read
+# /var/log/* (root:adm 640) and the journal (systemd-journal). Idempotent.
+# Re-asserted on every root start by apply-pending-upgrade.sh, so bundle
+# upgrades that skip this installer don't silently lose it.
+for grp in adm systemd-journal; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        usermod -aG "$grp" "$SERVICE_USER" 2>/dev/null || true
+    fi
+done
 
 # --- log dir -----------------------------------------------------------------
 
@@ -321,6 +360,46 @@ done
 printf '\n'
 
 [[ -z "$VERSION_LINE" ]] && VERSION_LINE="ongrid-edge ($(stat -c '%y' ${INSTALL_DIR}/ongrid-edge 2>/dev/null | cut -d. -f1))"
+
+# --- self-check --------------------------------------------------------------
+#
+# Turn the three silent failure modes (missing plugin binary, unreadable
+# journal, unreachable data plane) into loud, actionable output. All checks
+# are guarded inside `if` so they never trip the ERR trap.
+echo
+echo "${C_BOLD}${C_CYAN}--- self-check ---${C_RESET}"
+SELFCHECK_FAIL=0
+for tool in promtail otelcol-contrib node_exporter process_exporter; do
+    if [[ -x "${APPLY_HOOK_DIR}/${tool}" ]]; then
+        log_ok "plugin binary present: ${tool}"
+    else
+        log_error "plugin binary MISSING: ${APPLY_HOOK_DIR}/${tool} — that plugin will not run"
+        SELFCHECK_FAIL=1
+    fi
+done
+if command -v runuser >/dev/null 2>&1; then
+    JREAD=(runuser -u "$SERVICE_USER" -- journalctl -n 1 --no-pager)
+else
+    JREAD=(sudo -u "$SERVICE_USER" journalctl -n 1 --no-pager)
+fi
+if "${JREAD[@]}" >/dev/null 2>&1; then
+    log_ok "journald readable by ${SERVICE_USER}"
+else
+    log_error "${SERVICE_USER} cannot read the journal — journald log shipping will be empty"
+    log_error "  fix: usermod -aG systemd-journal ${SERVICE_USER}; ensure persistent journal (/var/log/journal)"
+    SELFCHECK_FAIL=1
+fi
+DP_HOST="${SERVER_HTTP_ADDR%%:*}"
+if [[ -n "$DP_HOST" ]] && timeout 5 bash -c "exec 3<>/dev/tcp/${DP_HOST}/443" 2>/dev/null; then
+    log_ok "data-plane host ${DP_HOST}:443 reachable (TCP)"
+else
+    log_warn "data-plane host ${DP_HOST}:443 not reachable from here — logs/traces push may fail"
+fi
+if [[ $SELFCHECK_FAIL -eq 0 ]]; then
+    log_ok "self-check passed"
+else
+    log_warn "self-check found problems above — agent is up but some telemetry will be missing until fixed"
+fi
 
 # --- final report ------------------------------------------------------------
 

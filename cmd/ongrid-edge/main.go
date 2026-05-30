@@ -226,6 +226,32 @@ func main() {
 	for _, p := range registered {
 		supervisor.Register(p)
 	}
+	// Ship per-plugin health on every heartbeat so the manager / UI can
+	// see which plugins are running vs. crashed (and why) instead of
+	// discovering empty telemetry days later. Set after the supervisor
+	// exists; the agent reads this under a lock so the post-Run wiring is
+	// race-free.
+	agent.SetPluginHealthFn(func() []tunnel.PluginHealthWire {
+		snaps := supervisor.HealthSnapshots()
+		out := make([]tunnel.PluginHealthWire, 0, len(snaps))
+		for _, s := range snaps {
+			w := tunnel.PluginHealthWire{
+				Name:         s.Name,
+				State:        string(s.State),
+				LastError:    s.LastError,
+				RestartCount: s.RestartCount,
+				PID:          s.PID,
+			}
+			if !s.StartedAt.IsZero() {
+				w.StartedAt = s.StartedAt.Unix()
+			}
+			if !s.UpdatedAt.IsZero() {
+				w.UpdatedAt = s.UpdatedAt.Unix()
+			}
+			out = append(out, w)
+		}
+		return out
+	})
 	// Manager → edge reload push: when manager mutates plugin config it
 	// calls MethodPluginConfigsChanged on this edge. We just nudge the
 	// supervisor to re-fetch — body is empty by design.

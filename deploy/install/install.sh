@@ -30,6 +30,55 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 
+# Prompt for a value with a 30s countdown; on timeout or empty Enter return
+# the default ($2). Mirrors liaison's read_with_countdown: all UI goes to
+# stderr and the chosen value is the only thing on stdout (so it works in
+# `VAR=$(read_with_countdown ...)`). Reads /dev/tty so it survives
+# `curl … | bash`. Caller must confirm /dev/tty is usable first.
+read_with_countdown() {
+    local prompt="$1" default_value="$2" timeout="${3:-30}"
+    local input="" remaining="$timeout"
+
+    echo "" >&2
+    echo -e "${C_BOLD}${C_YELLOW}===============================================================${C_RESET}" >&2
+    echo -e "${C_BOLD}${C_CYAN}${prompt}${C_RESET}" >&2
+    echo -e "${C_BOLD}${C_YELLOW}===============================================================${C_RESET}" >&2
+    echo "" >&2
+    echo -e "${C_YELLOW}Auto-continue in ${remaining}s with the default below.${C_RESET}" >&2
+    echo -ne "${C_BOLD}${C_CYAN}>>> [${default_value}]: ${C_RESET}" >&2
+
+    (
+        local count=$((timeout - 1))
+        while [ "$count" -gt 0 ]; do
+            sleep 1
+            echo -ne "\033[s\033[1A\033[K${C_YELLOW}Auto-continue in ${count}s with the default below.${C_RESET}\033[u" >&2
+            count=$((count - 1))
+        done
+        sleep 1
+        echo -ne "\033[s\033[1A\033[K${C_GREEN}Timed out — using default: ${default_value}${C_RESET}\033[u" >&2
+    ) &
+    local cd_pid=$!
+
+    if read -r -t "$timeout" input </dev/tty 2>/dev/null; then
+        kill "$cd_pid" 2>/dev/null || true
+        wait "$cd_pid" 2>/dev/null || true
+        echo -ne "\033[1A\033[K" >&2
+        echo "" >&2
+        if [[ -z "$input" ]]; then
+            echo -e "${C_GREEN}using default: ${default_value}${C_RESET}" >&2
+            printf '%s' "$default_value"
+        else
+            echo -e "${C_GREEN}using: ${input}${C_RESET}" >&2
+            printf '%s' "$input"
+        fi
+    else
+        wait "$cd_pid" 2>/dev/null || true
+        echo "" >&2
+        echo -e "${C_GREEN}using default: ${default_value}${C_RESET}" >&2
+        printf '%s' "$default_value"
+    fi
+}
+
 # ---------- flags ----------
 PROFILE_MONITORING=0
 NO_SEED=0
@@ -416,20 +465,17 @@ if is_blank GRAFANA_ADMIN_PASSWORD; then
     log_info "generated GRAFANA_ADMIN_PASSWORD"
 fi
 
-# ONGRID_PUBLIC_URL — manager hands this URL to edges as the data-plane
-# endpoint for plugin telemetry (logs / traces push). Empty disables
-# plugin endpoints, which silently breaks "edge can push logs to Loki"
-# on first install. We auto-fill with the operator's host + HTTPS port
-# so the common case works out of the box; operators behind a proper
-# domain edit .env post-install.
+# ONGRID_PUBLIC_URL — the address EDGES use to reach this manager's data
+# plane (logs→Loki, traces→OTLP push). A wrong value here is the #1 cause
+# of "only the manager-host edge ships logs": auto-detection picks an
+# INTERNAL IP that remote edges can't route to, and the failure is silent.
+# So we make the operator confirm it. Resolution order:
+#   1. Already set in .env (re-install / operator pre-seeded)   → keep
+#   2. Exported env var ONGRID_PUBLIC_URL                        → use (non-interactive automation)
+#   3. Interactive terminal: 30s countdown prompt (default=detected)
+#   4. No terminal & nothing supplied: detected host + loud warning
 if is_blank ONGRID_PUBLIC_URL; then
-    # Detect best host string for the public URL. hostname -f on stock
-    # cloud images often returns 'localhost.localdomain' which makes
-    # promtail / otelcol push to a black hole. Prefer in order:
-    #   1. First non-loopback IPv4 from `hostname -I`
-    #   2. `ip route get 8.8.8.8` source IP
-    #   3. hostname -f only if it's not localhost*
-    #   4. Literal 'localhost' (only as last resort)
+    # ---- best-guess default host (same heuristics as before) ----
     HOST_FOR_URL=""
     if h=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' | head -1); then
         HOST_FOR_URL="$h"
@@ -448,11 +494,30 @@ if is_blank ONGRID_PUBLIC_URL; then
     PORT_FOR_URL=$(grep -E '^ONGRID_HTTP_PORT=' "$ENV_FILE" | cut -d= -f2- || echo 443)
     : "${PORT_FOR_URL:=443}"
     if [[ "$PORT_FOR_URL" == "443" ]]; then
-        fill_blank ONGRID_PUBLIC_URL "https://${HOST_FOR_URL}"
+        DEFAULT_PUBLIC_URL="https://${HOST_FOR_URL}"
     else
-        fill_blank ONGRID_PUBLIC_URL "https://${HOST_FOR_URL}:${PORT_FOR_URL}"
+        DEFAULT_PUBLIC_URL="https://${HOST_FOR_URL}:${PORT_FOR_URL}"
     fi
-    log_info "auto-set ONGRID_PUBLIC_URL=https://${HOST_FOR_URL}:${PORT_FOR_URL} (edit .env to override)"
+
+    # ---- resolve the value to write ----
+    RESOLVED_PUBLIC_URL=""
+    if [[ -n "${ONGRID_PUBLIC_URL:-}" ]]; then
+        RESOLVED_PUBLIC_URL="${ONGRID_PUBLIC_URL}"
+        log_info "ONGRID_PUBLIC_URL taken from environment: ${RESOLVED_PUBLIC_URL}"
+    elif [[ -e /dev/tty ]] && ( : </dev/tty ) 2>/dev/null; then
+        RESOLVED_PUBLIC_URL=$(read_with_countdown \
+"Set the URL your EDGE agents use to reach THIS manager (logs/traces data plane).
+This must be reachable FROM your edges — usually your PUBLIC IP or domain,
+e.g. https://ops.example.com or https://203.0.113.10 . Press Enter to accept
+the detected default, or type the correct address." \
+            "$DEFAULT_PUBLIC_URL")
+    else
+        RESOLVED_PUBLIC_URL="$DEFAULT_PUBLIC_URL"
+        log_warn "no interactive terminal and ONGRID_PUBLIC_URL unset; auto-set to ${RESOLVED_PUBLIC_URL}"
+        log_warn "if that is an INTERNAL address your remote edges can't reach, edit ${ENV_FILE} and restart"
+    fi
+    fill_blank ONGRID_PUBLIC_URL "$RESOLVED_PUBLIC_URL"
+    log_info "ONGRID_PUBLIC_URL=${RESOLVED_PUBLIC_URL} (edit .env to change)"
 fi
 
 # Bump ONGRID_VERSION to match VERSION file.

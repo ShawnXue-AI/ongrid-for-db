@@ -48,6 +48,7 @@ type EdgeService interface {
 	FetchPackage(ctx context.Context, edgeID uint64, url, sha256, version string) (tunnel.FetchPackageResponse, error)
 	ApplyPackage(ctx context.Context, edgeID uint64) (tunnel.ApplyPackageResponse, error)
 	GetProcessList(ctx context.Context, edgeID uint64, topN uint32, sortBy string) (tunnel.GetProcessListResponse, error)
+	PluginHealth(edgeID uint64) []biz.PluginHealth
 }
 
 // PackageResolver locates the baked edge bundle for an arch+version
@@ -178,7 +179,62 @@ func (h *Handler) listPlugins(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": rows})
+	// Merge in live runtime health (heartbeat-fed, in-memory) keyed by
+	// plugin name so each toggle row also shows running/crashed + the
+	// crash reason. Health absent (edge offline / pre-introduction agent)
+	// → health is null and the UI shows "unknown".
+	healthByName := map[string]*pluginHealthDTO{}
+	for _, hp := range h.svc.PluginHealth(id) {
+		healthByName[hp.Name] = &pluginHealthDTO{
+			State:        hp.State,
+			LastError:    hp.LastError,
+			RestartCount: hp.RestartCount,
+			PID:          hp.PID,
+			StartedAt:    nilIfZero(hp.StartedAt),
+			UpdatedAt:    nilIfZero(hp.UpdatedAt),
+			ReportedAt:   nilIfZero(hp.ReportedAt),
+		}
+	}
+	items := make([]pluginItemDTO, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, pluginItemDTO{
+			PluginName: row.PluginName,
+			Enabled:    row.Enabled,
+			Spec:       row.Spec,
+			Health:     healthByName[row.PluginName],
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// pluginItemDTO is one row of the per-edge plugins list: static config
+// (enabled/spec) plus the optional live runtime health.
+type pluginItemDTO struct {
+	PluginName string                 `json:"plugin_name"`
+	Enabled    bool                   `json:"enabled"`
+	Spec       map[string]interface{} `json:"spec,omitempty"`
+	Health     *pluginHealthDTO       `json:"health,omitempty"`
+}
+
+// pluginHealthDTO is the wire shape for one plugin's heartbeat-reported
+// runtime health. nil times render as omitted.
+type pluginHealthDTO struct {
+	State        string     `json:"state"`
+	LastError    string     `json:"last_error,omitempty"`
+	RestartCount int        `json:"restart_count,omitempty"`
+	PID          int        `json:"pid,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+	ReportedAt   *time.Time `json:"reported_at,omitempty"`
+}
+
+// nilIfZero returns a pointer to t, or nil when t is the zero time (so the
+// JSON omitempty drops it instead of emitting "0001-01-01T00:00:00Z").
+func nilIfZero(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func (h *Handler) setPlugin(w http.ResponseWriter, r *http.Request) {

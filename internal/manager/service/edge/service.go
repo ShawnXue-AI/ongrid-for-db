@@ -84,6 +84,12 @@ func (s *Service) HandleHeartbeat(ctx context.Context, edgeID uint64, ts time.Ti
 	return s.uc.HandleHeartbeat(ctx, edgeID, ts)
 }
 
+// PluginHealth returns the last-reported per-plugin runtime health for one
+// edge (in-memory, fed by the heartbeat path). nil when none reported yet.
+func (s *Service) PluginHealth(edgeID uint64) []biz.PluginHealth {
+	return s.uc.PluginHealth(edgeID)
+}
+
 // GetProcessList dispatches the get_process_list RPC to a connected
 // edge. edge agent enumerates the host via gopsutil and returns the
 // top N processes sorted by cpu or mem. Used by the Monitor page's

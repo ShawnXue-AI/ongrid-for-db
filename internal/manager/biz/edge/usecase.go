@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	devicebiz "github.com/ongridio/ongrid/internal/manager/biz/device"
@@ -45,6 +46,11 @@ type Usecase struct {
 	mirror  NodeMirror
 	plugins PluginConfigSeeder
 	log     *slog.Logger
+
+	// In-memory per-edge plugin health, fed by the heartbeat path. See
+	// plugin_health.go. Lazily initialised so a zero-value Usecase works.
+	phMu         sync.RWMutex
+	pluginHealth map[uint64][]PluginHealth
 }
 
 // PluginConfigSeeder is the narrow contract Create uses to write the

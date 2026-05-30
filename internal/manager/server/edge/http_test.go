@@ -145,6 +145,7 @@ func (f *fakeSvc) ApplyPackage(_ context.Context, _ uint64) (tunnel.ApplyPackage
 func (f *fakeSvc) GetProcessList(_ context.Context, _ uint64, _ uint32, _ string) (tunnel.GetProcessListResponse, error) {
 	return tunnel.GetProcessListResponse{}, nil
 }
+func (f *fakeSvc) PluginHealth(_ uint64) []biz.PluginHealth { return nil }
 
 // buildRouter wraps h.Register on a chi router with a middleware that
 // injects the given tenant (simulating auth).

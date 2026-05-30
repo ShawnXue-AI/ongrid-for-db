@@ -16,13 +16,30 @@ import { request } from './client';
 // a raw JSON editor for those.
 export type PluginName = 'metrics' | 'logs' | 'traces' | 'profiles' | string;
 
+// PluginHealth is the live runtime health the edge ships on each heartbeat
+// (in-memory on the manager). Absent (undefined) when the edge is offline or
+// runs a pre-introduction agent. last_error carries the crash reason, e.g.
+// "subprocess binary missing" — that is what turns a silent empty-telemetry
+// failure into something an operator can see.
+export type PluginHealth = {
+  state: 'stopped' | 'starting' | 'running' | 'crashed' | string;
+  last_error?: string;
+  restart_count?: number;
+  pid?: number;
+  started_at?: string;
+  updated_at?: string;
+  reported_at?: string;
+};
+
 // PluginRow is the UI/HTTP-friendly view returned by ListForUI. Every
 // known plugin shows up even if the row hasn't been written yet —
-// enabled defaults to false, spec is undefined.
+// enabled defaults to false, spec is undefined. health is the live
+// heartbeat-reported runtime state (undefined until the edge reports).
 export type PluginRow = {
   plugin_name: PluginName;
   enabled: boolean;
   spec?: Record<string, unknown>;
+  health?: PluginHealth;
 };
 
 export type PluginListResp = { items: PluginRow[] };
