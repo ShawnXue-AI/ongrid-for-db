@@ -24,8 +24,13 @@ const KnowledgeReposPage = lazy(() => import('@/pages/KnowledgeRepos'));
 const TopologyPage = lazy(() => import('@/pages/Topology'));
 const SettingsLayout = lazy(() => import('@/pages/SettingsLayout'));
 const SettingsLLM = lazy(() => import('@/pages/settings/LLM'));
-const SettingsCommunications = lazy(() => import('@/pages/settings/Communications'));
-const SettingsIMApps = lazy(() => import('@/pages/settings/IMApps'));
+// Notifications = one-way alert delivery channels (Slack/Telegram/Larksuite
+// /DingTalk/WeCom/Webhook); Channels = two-way IM bots (Slack/Telegram/
+// Larksuite/DingTalk). The pages are deliberately paired: sender / receiver
+// halves of the same comms surface, kept on adjacent /settings/* paths so
+// admin nav stays predictable.
+const SettingsNotifications = lazy(() => import('@/pages/settings/Notifications'));
+const SettingsChannels = lazy(() => import('@/pages/settings/Channels'));
 const SettingsIntegrations = lazy(() => import('@/pages/settings/Integrations'));
 const SettingsMarketplace = lazy(() => import('@/pages/settings/Marketplace'));
 const SettingsPreferences = lazy(() => import('@/pages/settings/Preferences'));
@@ -112,16 +117,23 @@ export default function App() {
         <Route path="/settings/webshell" element={<Navigate to="/edges/shell-sessions" replace />} />
         <Route path="/settings/users" element={<Navigate to="/admin/users" replace />} />
         <Route path="/settings/orgs" element={<Navigate to="/admin/orgs" replace />} />
-        <Route path="/settings/communication" element={<Navigate to="/settings/communications" replace />} />
-        <Route path="/settings/notifications" element={<Navigate to="/settings/communications" replace />} />
+        {/* 2026-05-30 naming sweep: the alert-delivery page is now
+            "Notifications" (one-way), the IM-bot page is now "Channels"
+            (two-way). URL ↔ label is uniform across nav + page title.
+            Old paths (/communications, /bots, /communication) redirect
+            here so any bookmark or deep-link survives. */}
+        <Route path="/settings/communication" element={<Navigate to="/settings/notifications" replace />} />
+        <Route path="/settings/communications" element={<Navigate to="/settings/notifications" replace />} />
+        <Route path="/settings/bots" element={<Navigate to="/settings/channels" replace />} />
+        <Route path="/settings/im-apps" element={<Navigate to="/settings/channels" replace />} />
         <Route path="/settings/advanced" element={<Navigate to="/settings/integrations" replace />} />
         <Route path="/settings/monitor" element={<Navigate to="/settings/integrations" replace />} />
         <Route path="/settings/general" element={<Navigate to="/settings/integrations" replace />} />
         <Route path="/settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="integrations" replace />} />
           <Route path="llm" element={<SettingsLLM />} />
-          <Route path="communications" element={<SettingsCommunications />} />
-          <Route path="bots" element={<SettingsIMApps />} />
+          <Route path="notifications" element={<SettingsNotifications />} />
+          <Route path="channels" element={<SettingsChannels />} />
           <Route path="integrations" element={<SettingsIntegrations />} />
           {/* /settings/marketplace retired (2026-05-19). Install surface
               is currently hidden from visible nav (no AIOps skill

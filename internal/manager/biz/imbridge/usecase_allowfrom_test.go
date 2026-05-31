@@ -17,11 +17,12 @@ func TestParseAllowFrom(t *testing.T) {
 		{"newline+semicolon", "111\n222;333", []string{"111", "222", "333"}},
 		{"strip prefixes", "telegram:111, tg:222, 333", []string{"111", "222", "333"}},
 		{"dedup preserves order", "222,111,222,111", []string{"222", "111"}},
-		// Security boundary: negative IDs (group/supergroup chat IDs) and
-		// non-numeric junk must NOT become allowed senders.
-		{"reject negative chat ids", "-1001234567890, 111", []string{"111"}},
-		{"reject non-numeric", "abc, 12a, , 111", []string{"111"}},
-		{"all junk -> empty (deny all)", "-1, abc, *, tg:", nil},
+		// Provider-agnostic: any non-empty trimmed token survives. Format-
+		// based filtering (numeric for Telegram, U… for Slack) is enforced
+		// per provider in validate() — see TestValidateTelegramRequiresAllowFrom
+		// and TestValidateSlackRequiresAllowFrom below.
+		{"keeps slack U… ids", "U01ABC, U02DEF", []string{"U01ABC", "U02DEF"}},
+		{"keeps negative chat-id-shaped tokens", "-1001234567890, 111", []string{"-1001234567890", "111"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,5 +66,44 @@ func TestValidateTelegramRequiresAllowFrom(t *testing.T) {
 	in.AllowFrom = "111"
 	if err := in.validate(); err == nil {
 		t.Error("telegram webhook mode should be rejected")
+	}
+}
+
+// Slack mirrors the Telegram safety contract: any workspace member could
+// otherwise talk to a tool-equipped agent. Format check rejects obvious
+// typos (numeric or short tokens) so the operator notices, instead of a
+// silently-empty allowlist that ignores everyone.
+func TestValidateSlackRequiresAllowFrom(t *testing.T) {
+	// Slack secret is the two-token JSON envelope — validate() doesn't
+	// parse it (the stream factory does), so a placeholder string is fine
+	// for the validate-layer assertions.
+	base := AppInput{Provider: "slack", Mode: "stream", Name: "slack", AppID: "T0AAA", AppSecret: `{"app_token":"xapp-1","bot_token":"xoxb-1"}`}
+
+	in := base
+	if err := in.validate(); err == nil {
+		t.Error("slack with empty allow_from should be rejected")
+	}
+
+	in = base
+	in.AllowFrom = "12345, abc" // numeric / non-U → no Slack ID resolved
+	if err := in.validate(); err == nil {
+		t.Error("slack with no VALID U… id should be rejected")
+	}
+
+	in = base
+	in.AllowFrom = "U01ABCDEF, W02GUEST" // U normal user; W rare enterprise guest
+	if err := in.validate(); err != nil {
+		t.Errorf("slack with valid U/W ids should pass: %v", err)
+	}
+	if in.AllowFrom != "U01ABCDEF,W02GUEST" {
+		t.Errorf("allow_from canonicalize: got %q", in.AllowFrom)
+	}
+
+	// Slack is stream-only (Socket Mode).
+	in = base
+	in.Mode = "webhook"
+	in.AllowFrom = "U01ABCDEF"
+	if err := in.validate(); err == nil {
+		t.Error("slack webhook mode should be rejected")
 	}
 }

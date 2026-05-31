@@ -19,6 +19,7 @@ import { UserPanelGrid } from '@/components/monitor/UserPanelGrid';
 import { ProcessTopPanel } from '@/components/monitor/ProcessTopPanel';
 import { useObservability } from '@/store/observability';
 import { listEdges, type Edge, type EdgeRole } from '@/api/edges';
+import { onDevicesChanged } from '@/lib/events';
 import { injectDeviceIDFilter } from '@/lib/promql';
 import { RoleSelect, type RoleFilterValue } from '@/components/ui';
 import { useI18n, tr } from '@/i18n/locale';
@@ -319,13 +320,22 @@ export default function MonitorPage() {
   // is hardcoded above + user panels fetched from /v1/monitor/panels.
   const [grafanaBase, setGrafanaBase] = useState<string>('');
 
-  // Devices loaded once for role filter — used to map role → device_id list
-  // so PromQL gets rewritten with a `device_id=~"..."` matcher.
+  // Devices drive the role filter — role chip becomes a `device_id=~"..."`
+  // PromQL matcher via filteredDeviceIDs below. Mount-fetch + subscribe to
+  // the cross-component devices-changed event so role edits on Edges show
+  // up here without a remount (otherwise the panels render against a stale
+  // role set — same pattern as the Sidebar bug).
   const [edges, setEdges] = useState<Edge[]>([]);
   useEffect(() => {
-    listEdges()
-      .then((r) => setEdges(r.items ?? []))
-      .catch(() => setEdges([]));
+    let cancelled = false;
+    const load = () => {
+      listEdges()
+        .then((r) => { if (!cancelled) setEdges(r.items ?? []); })
+        .catch(() => { if (!cancelled) setEdges([]); });
+    };
+    load();
+    const unsubscribe = onDevicesChanged(load);
+    return () => { cancelled = true; unsubscribe(); };
   }, []);
 
   const filteredDeviceIDs = useMemo<number[] | null>(() => {

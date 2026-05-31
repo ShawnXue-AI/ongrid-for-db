@@ -217,11 +217,30 @@ type RegisterEdgeResponse struct {
 // ---------------------------------------------------------------------
 
 // HeartbeatRequest carries a client-side timestamp. Server compares its
-// own clock to detect major skew.
+// own clock to detect major skew. Plugins piggybacks the per-plugin
+// runtime health so the manager / UI can see "agent is up but the logs
+// plugin crashed (binary missing)" instead of silent empty telemetry.
 type HeartbeatRequest struct {
-	EdgeID      uint64            `json:"edge_id,omitempty"`
-	Ts          int64             `json:"ts"` // unix seconds
-	StatusFlags map[string]string `json:"status_flags,omitempty"`
+	EdgeID      uint64             `json:"edge_id,omitempty"`
+	Ts          int64              `json:"ts"` // unix seconds
+	StatusFlags map[string]string  `json:"status_flags,omitempty"`
+	Plugins     []PluginHealthWire `json:"plugins,omitempty"`
+}
+
+// PluginHealthWire is one plugin's runtime health on the heartbeat wire.
+// Mirrors edgeagent/plugins.PluginHealth; the edge maps between the two so
+// the plugin runtime stays decoupled from the tunnel protocol. State is one
+// of stopped|starting|running|crashed. LastError is set when a plugin can't
+// start (e.g. "subprocess binary missing") — that string is the whole point
+// of this field: it turns a silent failure into an operator-visible reason.
+type PluginHealthWire struct {
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	LastError    string `json:"last_error,omitempty"`
+	RestartCount int    `json:"restart_count,omitempty"`
+	PID          int    `json:"pid,omitempty"`
+	StartedAt    int64  `json:"started_at,omitempty"` // unix sec, 0 if never started
+	UpdatedAt    int64  `json:"updated_at,omitempty"` // unix sec
 }
 
 // HeartbeatResponse is empty but kept as a typed value so callers can

@@ -37,7 +37,7 @@ type extractedReport struct {
 // paragraph" heuristic so the report still ships findings_md +
 // root_cause to operators. The fallback is silent to keep the alert
 // pipeline single-threaded happy-path simple.
-func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.Incident, finalAnswer string, toolCallCount int) ReadyFields {
+func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.Incident, finalAnswer string, toolCallCount int, locale string) ReadyFields {
 	// related_alerts is independent of Pass-2 — it's a pure DB query
 	// over alert_incidents, so we run it unconditionally and reuse the
 	// result whether or not the LLM extraction succeeds.
@@ -60,7 +60,7 @@ func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.In
 		return fallback
 	}
 
-	prompt := buildExtractorPrompt(incident, finalAnswer)
+	prompt := buildExtractorPrompt(incident, finalAnswer, locale)
 	cctx, cancel := context.WithTimeout(ctx, uc.cfg.SummarizerTimeout)
 	defer cancel()
 
@@ -212,8 +212,10 @@ Rules:
 
 // buildExtractorPrompt frames the alert context + worker output for
 // the structured extraction call. Keeps the prompt fully self-contained
-// so the summarizer doesn't need the in-progress chat history.
-func buildExtractorPrompt(incident alertmodel.Incident, finalAnswer string) string {
+// so the summarizer doesn't need the in-progress chat history. locale
+// overrides the language the JSON string fields come back in — without
+// it the extractor inherits whatever language the worker wrote in.
+func buildExtractorPrompt(incident alertmodel.Incident, finalAnswer string, locale string) string {
 	var b strings.Builder
 	b.WriteString("# Alert\n")
 	fmt.Fprintf(&b, "  rule: %s (%s)\n", incident.Rule, incident.RuleName)
@@ -235,6 +237,12 @@ func buildExtractorPrompt(incident alertmodel.Incident, finalAnswer string) stri
 	b.WriteString("\n# Investigator narrative (markdown)\n\n")
 	b.WriteString(finalAnswer)
 	b.WriteString("\n\n# Now output the JSON described in the system prompt.\n")
+	if d := localeDirective(locale); d != "" {
+		b.WriteString("\n")
+		b.WriteString(d)
+		b.WriteString("\n")
+		b.WriteString("Specifically: every string value in the JSON (root_cause, evidence[].summary, suggested_actions[].label, etc.) MUST be in the specified language, regardless of what language the worker narrative above uses.\n")
+	}
 	return b.String()
 }
 

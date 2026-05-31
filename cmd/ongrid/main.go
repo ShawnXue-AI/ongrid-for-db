@@ -94,6 +94,7 @@ import (
 	managerserverknowledge "github.com/ongridio/ongrid/internal/manager/server/knowledge"
 	managerbizimbridge "github.com/ongridio/ongrid/internal/manager/biz/imbridge"
 	managerbizimbridgefeishu "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/feishu"
+	managerbizimbridgeslack "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/slack"
 	managerbizimbridgetelegram "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/telegram"
 	managerimbridgedata "github.com/ongridio/ongrid/internal/manager/data/imbridge/store"
 	managerserverimbridge "github.com/ongridio/ongrid/internal/manager/server/imbridge"
@@ -495,7 +496,7 @@ func main() {
 			APIKey:  cfg.OpenAI.APIKey,
 			Model:   firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"),
 			BaseURL: cfg.OpenAI.BaseURL,
-			Models:  dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4o"),
+			Models:  dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
 		})
 	}
 	if cfg.LLM.Anthropic.APIKey != "" {
@@ -590,7 +591,7 @@ func main() {
 		key  string
 		list []string
 	}{
-		{settingmodel.KeyOpenAIModels, dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4o")},
+		{settingmodel.KeyOpenAIModels, dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini")},
 		{settingmodel.KeyAnthropicModels, cfg.LLM.Anthropic.Models},
 		{settingmodel.KeyZhipuModels, cfg.LLM.Zhipu.Models},
 		{settingmodel.KeyGeminiModels, cfg.LLM.Gemini.Models},
@@ -620,7 +621,7 @@ func main() {
 			APIKey:  cfg.OpenAI.APIKey,
 			Model:   firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"),
 			BaseURL: cfg.OpenAI.BaseURL,
-			Models:  dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4o"),
+			Models:  dedupeModels(firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
 		},
 		settingmodel.LLMProviderAnthropic: {
 			Label:   "Anthropic",
@@ -1322,6 +1323,11 @@ func main() {
 	// friendly behind GFW). Sender allowlist enforced in the provider
 	// (ADR-031).
 	imbridgeStreamSupervisor.RegisterFactory("telegram", managerbizimbridgetelegram.NewStreamFactory(log))
+	// Slack is stream-only via Socket Mode (outbound WebSocket → same
+	// proxy-friendly philosophy as Telegram getUpdates). Allowlist
+	// enforced in the provider so a misconfigured open workspace can't
+	// turn the agent into an LLM toy for random members.
+	imbridgeStreamSupervisor.RegisterFactory("slack", managerbizimbridgeslack.NewStreamFactory(log))
 	go imbridgeStreamSupervisor.Run(rootCtx)
 
 	// @-mention search backend (HLD: ChatInput @-popover). Wires
@@ -1496,6 +1502,13 @@ func main() {
 				SummarizerProvider: firstNonEmpty(os.Getenv("ONGRID_INVESTIGATOR_SUMMARIZER_PROVIDER"), defSumProvider),
 				SummarizerTimeout:  30 * time.Second,
 				MaxConcurrent:      maxCC,
+				// Fall-back language for auto-fire + backfill (no request
+				// context, no Accept-Language). Manual triggers override per
+				// request. Default "en" so a fresh deployment matches the
+				// English SPA by default; ops sets ONGRID_DEFAULT_LOCALE=zh
+				// for an explicitly Chinese-default install.
+				// See [[feedback_ai_output_locale]].
+				DefaultLocale: firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"),
 			}, log)
 			// Same InvestigationRepo also implements the
 			// related-alerts query (same DB handle, different method).
@@ -1517,6 +1530,35 @@ func main() {
 		alertUC.SetInvestigator(chained)
 	}
 
+	// Boot compensation pass for the structured RCA path: incidents that
+	// fired while no LLM provider was configured had their auto-investigation
+	// silently skipped (RecordFiring nil-checks the investigator), so the
+	// IncidentDetail page would show status=not_started forever. Now that
+	// the investigator is wired, re-enqueue any unstarted incidents in the
+	// last 24h through the normal severity / inflight / concurrency-cap
+	// gates. Bounded by limit=100 to cap the LLM burst (the global
+	// concurrency cap further damps it). Goroutine + brief detached ctx so
+	// boot doesn't block on the DB scan.
+	if rcaInvConcrete != nil {
+		go func() {
+			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer bfCancel()
+			n, err := rcaInvConcrete.BackfillUnstartedIncidents(
+				bfCtx,
+				time.Now().Add(-24*time.Hour),
+				100,
+				alertUC.GetIncident,
+			)
+			if err != nil {
+				log.Warn("alert: unstarted-investigation backfill failed", slog.Any("err", err))
+				return
+			}
+			if n > 0 {
+				log.Info("alert: backfilled unstarted investigations on boot", slog.Int("dispatched", n))
+			}
+		}()
+	}
+
 	alertSvc := managersvcalert.New(alertUC, alertRepo, notifyRouter, log.With(slog.String("comp", "alert-svc")))
 	// Wire the read-only preview clients (Prom range + Loki range). Each
 	// is optional — when nil, the corresponding kind returns
@@ -1532,7 +1574,8 @@ func main() {
 		alertSvc.SetPreviewDeps(previewDeps)
 	}
 	alertHandler := managerserveralert.NewHandler(alertSvc, alertSvc, alertSvc).
-		WithInvestigations(manageralertdata.NewInvestigationRepo(db))
+		WithInvestigations(manageralertdata.NewInvestigationRepo(db)).
+		WithRuntime(cfg.Alert.EvaluatorInterval, cfg.Alert.Cooldown)
 	if rcaInvConcrete != nil {
 		alertHandler.WithInvestigationTrigger(rcaInvConcrete)
 	}

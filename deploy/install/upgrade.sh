@@ -435,8 +435,11 @@ if [[ $HEALTH_OK -eq 1 ]]; then
     # Match both the legacy .tar.gz and the current .tar.xz (release packages
     # switched to xz) so upgrades from a pre-xz install still prune old gz
     # tarballs. The two explicit globs avoid .tar.* also matching .sha256.
-    ls -1t "$INSTALL_DIR"/ongrid-v*-linux-amd64.tar.gz \
-           "$INSTALL_DIR"/ongrid-v*-linux-amd64.tar.xz 2>/dev/null \
+    # `|| true` inside the group: when only one extension is present the other
+    # glob stays literal and `ls` exits non-zero — harmless here, but under
+    # `set -o pipefail` it would abort this best-effort cleanup step.
+    { ls -1t "$INSTALL_DIR"/ongrid-v*-linux-amd64.tar.gz \
+             "$INSTALL_DIR"/ongrid-v*-linux-amd64.tar.xz 2>/dev/null || true; } \
         | tail -n +3 \
         | while read -r f; do
             rm -f "$f" "${f}.sha256"

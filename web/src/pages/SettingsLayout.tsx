@@ -33,8 +33,12 @@ const RAIL_ITEMS: RailItem[] = [
   // /skills?tab=install so the whole skill story (loaded + installed)
   // lives on one page. The Settings route still redirects bookmarks.
   { to: 'llm', icon: KeyRound, labelZh: '模型', labelEn: 'LLM', hintZh: 'OpenAI / 兼容服务', hintEn: 'OpenAI / compatible providers' },
-  { to: 'communications', icon: Bell, labelZh: '通知', labelEn: 'Notifications', hintZh: '飞书 / 钉钉 / 企业微信 / Slack / Telegram / Webhook（告警推送）', hintEn: 'Slack / Telegram / Feishu / DingTalk / WeCom / Webhook (alert delivery)' },
-  { to: 'bots', icon: MessagesSquare, labelZh: '渠道', labelEn: 'Channels', hintZh: '飞书 / 钉钉 / Telegram bot 双向多轮', hintEn: 'Feishu / DingTalk / Telegram bots — two-way multi-turn' },
+  // 通知 = 单向告警推送(channel in the alert sense). channels = 双向 chat
+  // bot(IM in the messaging sense). We pair URL ↔ label so the route name
+  // matches what the user sees in the sidebar; back-compat redirects from
+  // the previous /communications and /bots paths live in App.tsx.
+  { to: 'notifications', icon: Bell, labelZh: '通知', labelEn: 'Notifications', hintZh: '飞书 / 钉钉 / 企业微信 / Slack / Telegram / Webhook（告警推送）', hintEn: 'Slack / Telegram / Larksuite / DingTalk / WeCom / Webhook (alert delivery)' },
+  { to: 'channels', icon: MessagesSquare, labelZh: '渠道', labelEn: 'Channels', hintZh: '飞书 / 钉钉 / Telegram / Slack 双向多轮', hintEn: 'Slack / Telegram / Larksuite / DingTalk — two-way multi-turn' },
   { to: 'preferences', icon: Gauge, labelZh: '偏好', labelEn: 'Preferences', hintZh: '默认时间窗 / 自动刷新', hintEn: 'Default time window / auto-refresh' },
 ];
 

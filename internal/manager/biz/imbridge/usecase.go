@@ -31,15 +31,16 @@ func NewUC(repo AdminRepo) *UC { return &UC{repo: repo} }
 
 // AppInput is the mutation payload.
 type AppInput struct {
-	Provider    string
-	Mode        string
-	Name        string
-	AppID       string
-	AppSecret   string
-	VerifyToken string
-	EncryptKey  string
-	AllowFrom   string // Telegram sender allowlist (numeric user IDs); see ParseAllowFrom
-	Enabled     bool
+	Provider      string
+	Mode          string
+	Name          string
+	AppID         string
+	AppSecret     string
+	VerifyToken   string
+	EncryptKey    string
+	AllowFrom     string // Telegram / Slack sender allowlist; see ParseAllowFrom
+	Enabled       bool
+	DefaultLocale string // "" | "en" | "zh" — see model.ImApp.DefaultLocale
 }
 
 // ParseAllowFrom splits a raw allowlist (comma / space / newline / semicolon
@@ -59,7 +60,7 @@ func ParseAllowFrom(raw string) []string {
 		tok = strings.TrimSpace(tok)
 		tok = strings.TrimPrefix(tok, "telegram:")
 		tok = strings.TrimPrefix(tok, "tg:")
-		if tok == "" || !isNumericID(tok) {
+		if tok == "" {
 			continue
 		}
 		if _, dup := seen[tok]; dup {
@@ -83,10 +84,25 @@ func isNumericID(s string) bool {
 func (in *AppInput) validate() error {
 	provider := strings.ToLower(strings.TrimSpace(in.Provider))
 	switch provider {
-	case model.ProviderFeishu, model.ProviderDingTalk, model.ProviderTelegram:
+	case model.ProviderFeishu, model.ProviderDingTalk, model.ProviderTelegram, model.ProviderSlack:
 	default:
-		return fmt.Errorf("%w: provider must be feishu, dingtalk, or telegram", errs.ErrInvalid)
+		return fmt.Errorf("%w: provider must be feishu, dingtalk, telegram, or slack", errs.ErrInvalid)
 	}
+	// Normalize + whitelist default_locale. Empty = no directive
+	// (LLM mirrors the user) — the legacy / "auto" mode. Anything outside
+	// {en, zh} is rejected so a typo'd "EN-us" doesn't silently degrade
+	// to no-directive behaviour. Strip the region tag down to the primary
+	// subtag so en-US / zh-CN are also accepted.
+	loc := strings.ToLower(strings.TrimSpace(in.DefaultLocale))
+	if loc != "" {
+		loc = strings.SplitN(loc, "-", 2)[0]
+		switch loc {
+		case "en", "zh":
+		default:
+			return fmt.Errorf("%w: default_locale must be empty (auto), en, or zh", errs.ErrInvalid)
+		}
+	}
+	in.DefaultLocale = loc
 	mode := strings.ToLower(strings.TrimSpace(in.Mode))
 	if mode == "" {
 		mode = model.ModeStream
@@ -115,9 +131,47 @@ func (in *AppInput) validate() error {
 		if mode != model.ModeStream {
 			return fmt.Errorf("%w: telegram only supports stream mode", errs.ErrInvalid)
 		}
-		ids := ParseAllowFrom(in.AllowFrom)
+		raw := ParseAllowFrom(in.AllowFrom)
+		// Telegram user IDs are numeric (BotFather + getMe return int64).
+		// Drop non-numeric tokens here rather than in ParseAllowFrom so the
+		// shared parser can be reused by Slack (whose IDs are letter-prefixed
+		// U…). A typo'd "alice" lands as "no IDs left" → operator sees the
+		// helpful required-error rather than a silently-empty allowlist.
+		ids := make([]string, 0, len(raw))
+		for _, id := range raw {
+			if isNumericID(id) {
+				ids = append(ids, id)
+			}
+		}
 		if len(ids) == 0 {
 			return fmt.Errorf("%w: telegram requires allow_from — at least one numeric Telegram user ID (the bot is publicly reachable; an empty allowlist would let anyone command the agent)", errs.ErrInvalid)
+		}
+		in.AllowFrom = strings.Join(ids, ",") // canonicalize stored form
+	}
+	// Slack: Socket Mode is the only mode the manager supports (webhook
+	// Events-API would require a public ingress; the whole point of
+	// Socket Mode is to avoid that — same shape as Telegram getUpdates).
+	// Allowlist semantics mirror Telegram: a Slack workspace bot accepts
+	// messages from any workspace member by default, which on a public
+	// or guest-rich workspace would let surprise users command the
+	// agent. Require at least one Slack user_id (U…) in allow_from so
+	// the operator must consciously open the door.
+	if provider == model.ProviderSlack {
+		if mode != model.ModeStream {
+			return fmt.Errorf("%w: slack only supports stream mode (Socket Mode)", errs.ErrInvalid)
+		}
+		raw := ParseAllowFrom(in.AllowFrom)
+		// Slack user IDs start with U (rare W for guests on Enterprise).
+		// Reject obvious typos here so the operator sees a clear error
+		// instead of "bot silently ignores everyone".
+		ids := make([]string, 0, len(raw))
+		for _, id := range raw {
+			if len(id) >= 2 && (id[0] == 'U' || id[0] == 'W') {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return fmt.Errorf("%w: slack requires allow_from — at least one Slack user ID (e.g. UABC123, find via Profile → ⋯ → Copy member ID). Without it any workspace member could command a tool-equipped agent", errs.ErrInvalid)
 		}
 		in.AllowFrom = strings.Join(ids, ",") // canonicalize stored form
 	}
@@ -141,17 +195,18 @@ func (uc *UC) CreateApp(ctx context.Context, in AppInput) (*model.ImApp, error) 
 	}
 	now := time.Now().UTC()
 	app := &model.ImApp{
-		Provider:    in.Provider,
-		Mode:        in.Mode,
-		Name:        in.Name,
-		AppID:       in.AppID,
-		AppSecret:   in.AppSecret,
-		VerifyToken: in.VerifyToken,
-		EncryptKey:  in.EncryptKey,
-		AllowFrom:   in.AllowFrom,
-		Enabled:     in.Enabled,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Provider:      in.Provider,
+		Mode:          in.Mode,
+		Name:          in.Name,
+		AppID:         in.AppID,
+		AppSecret:     in.AppSecret,
+		VerifyToken:   in.VerifyToken,
+		EncryptKey:    in.EncryptKey,
+		AllowFrom:     in.AllowFrom,
+		Enabled:       in.Enabled,
+		DefaultLocale: in.DefaultLocale,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	if err := uc.repo.CreateApp(ctx, app); err != nil {
 		return nil, fmt.Errorf("create im_app: %w", err)
@@ -180,6 +235,7 @@ func (uc *UC) UpdateApp(ctx context.Context, id uint64, in AppInput) (*model.ImA
 	cur.EncryptKey = in.EncryptKey
 	cur.AllowFrom = in.AllowFrom
 	cur.Enabled = in.Enabled
+	cur.DefaultLocale = in.DefaultLocale
 	cur.UpdatedAt = time.Now().UTC()
 	if err := uc.repo.UpdateApp(ctx, cur); err != nil {
 		return nil, fmt.Errorf("update im_app: %w", err)

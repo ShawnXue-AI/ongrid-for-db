@@ -261,6 +261,61 @@ echo ""
 log_info "last 20 log lines:"
 journalctl -u ongrid-edge -n 20 --no-pager || true
 
+# ---------- post-install self-check ----------
+# The #1 silent failure is "agent runs but ships nothing": a plugin binary
+# wasn't bundled, the service user can't read the journal, or the data
+# plane host is unreachable. Surface all three loudly here instead of
+# letting the operator discover empty Loki / Prometheus days later. All
+# checks are guarded (inside `if`) so they never trip the ERR trap.
+echo ""
+echo "${C_BOLD}${C_CYAN}--- self-check ---${C_RESET}"
+SELFCHECK_FAIL=0
+
+# 1) plugin binaries present + executable
+for tool in promtail otelcol-contrib node_exporter process_exporter; do
+    if [[ -x "${PLUGIN_BIN_DIR}/${tool}" ]]; then
+        log_info "plugin binary present: ${tool}"
+    else
+        log_error "plugin binary MISSING: ${PLUGIN_BIN_DIR}/${tool} — that plugin will not run (incomplete bundle?)"
+        SELFCHECK_FAIL=1
+    fi
+done
+
+# 2) service user can read the journal (logs plugin journald source).
+# Group membership added above is visible to a fresh runuser/sudo session.
+if command -v runuser >/dev/null 2>&1; then
+    JREAD=(runuser -u "$SERVICE_USER" -- journalctl -n 1 --no-pager)
+else
+    JREAD=(sudo -u "$SERVICE_USER" journalctl -n 1 --no-pager)
+fi
+if "${JREAD[@]}" >/dev/null 2>&1; then
+    log_info "journald readable by $SERVICE_USER"
+else
+    log_error "$SERVICE_USER cannot read the journal — journald log shipping will be empty"
+    log_error "  fix: usermod -aG systemd-journal $SERVICE_USER ; ensure persistent journal (/var/log/journal)"
+    SELFCHECK_FAIL=1
+fi
+
+# 3) data-plane host reachability. The exact URL comes from the manager's
+# ONGRID_PUBLIC_URL at runtime, but the host is almost always the tunnel
+# host — probe TCP 443 there as a smoke test. WARN (not fail) since the
+# real port/host may differ.
+DP_HOST="${ONGRID_CLOUD_ADDR%%:*}"
+if [[ -n "$DP_HOST" ]]; then
+    if timeout 5 bash -c "exec 3<>/dev/tcp/${DP_HOST}/443" 2>/dev/null; then
+        log_info "data-plane host ${DP_HOST}:443 reachable (TCP)"
+    else
+        log_warn "data-plane host ${DP_HOST}:443 not reachable from here — logs/traces push may fail"
+        log_warn "  ensure the manager's ONGRID_PUBLIC_URL points to an address THIS edge can reach"
+    fi
+fi
+
+if [[ $SELFCHECK_FAIL -eq 0 ]]; then
+    log_info "self-check passed"
+else
+    log_error "self-check found problems above — agent is up but some telemetry will be missing until fixed"
+fi
+
 echo ""
 echo "${C_BOLD}${C_CYAN}===============================================================${C_RESET}"
 echo "${C_BOLD}${C_GREEN}  ongrid-edge installed${C_RESET}"

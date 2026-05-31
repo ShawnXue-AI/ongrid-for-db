@@ -234,6 +234,24 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			)
 			return nil, fmt.Errorf("heartbeat: %w", err)
 		}
+		// Piggybacked plugin health (best-effort, in-memory only). Lets the
+		// UI show "logs: crashed — binary missing" instead of silent empty
+		// telemetry. Never fail the heartbeat on this.
+		if len(in.Plugins) > 0 {
+			items := make([]edgebiz.PluginHealth, 0, len(in.Plugins))
+			for _, p := range in.Plugins {
+				items = append(items, edgebiz.PluginHealth{
+					Name:         p.Name,
+					State:        p.State,
+					LastError:    p.LastError,
+					RestartCount: p.RestartCount,
+					PID:          p.PID,
+					StartedAt:    unixOrZero(p.StartedAt),
+					UpdatedAt:    unixOrZero(p.UpdatedAt),
+				})
+			}
+			w.EdgeUC.RecordPluginHealth(canonicalEdgeID, items)
+		}
 		return json.Marshal(tunnel.HeartbeatResponse{})
 	}); err != nil {
 		return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodHeartbeat, err)
@@ -422,5 +440,14 @@ func resolveDeviceID(ctx context.Context, dr DeviceResolver, edgeID uint64) uint
 		return edgeID
 	}
 	return id
+}
+
+// unixOrZero converts a unix-seconds wire value to a UTC time, returning the
+// zero time for 0 (the edge sends 0 for "never started" / unset).
+func unixOrZero(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
 }
 

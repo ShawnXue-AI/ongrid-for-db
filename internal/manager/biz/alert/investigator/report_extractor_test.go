@@ -62,7 +62,7 @@ func TestExtractStructured_RelatedAlerts(t *testing.T) {
 	uc := (&Usecase{
 		cfg: Config{},
 	}).WithRelatedQuerier(related)
-	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 99, DeviceID: &dev}, "narrative", 0)
+	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 99, DeviceID: &dev}, "narrative", 0, "")
 
 	if fields.RelatedAlertsJSON == "[]" {
 		t.Fatalf("related_alerts_json not populated: %q", fields.RelatedAlertsJSON)
@@ -134,7 +134,7 @@ func TestExtractJSONBlob_VariousWrappers(t *testing.T) {
 func TestExtractStructured_SummarizerNil(t *testing.T) {
 	uc := &Usecase{cfg: Config{SummarizerTimeout: time.Second}}
 	final := "## Root\n\npg-replica-7 saturated"
-	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, final, 3)
+	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, final, 3, "")
 	if fields.RootCause != "pg-replica-7 saturated" {
 		t.Errorf("root_cause = %q", fields.RootCause)
 	}
@@ -175,7 +175,7 @@ func TestExtractStructured_ParsesValid(t *testing.T) {
 			SummarizerTimeout: time.Second,
 		},
 	}
-	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narrative", 7)
+	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narrative", 7, "")
 
 	if fields.RootCause != "PID 8821 saturated CPU on pg-replica-7" {
 		t.Errorf("root_cause = %q", fields.RootCause)
@@ -213,7 +213,7 @@ func TestExtractStructured_LLMError(t *testing.T) {
 		cfg:        Config{SummarizerModel: "glm-4-air", SummarizerTimeout: time.Second},
 	}
 	final := "Root cause line\n\nbody"
-	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, final, 0)
+	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, final, 0, "")
 	if fields.RootCause != "Root cause line" {
 		t.Errorf("root_cause fallback = %q", fields.RootCause)
 	}
@@ -229,7 +229,7 @@ func TestExtractStructured_BadJSON(t *testing.T) {
 		Assistant: llm.Message{Role: "assistant", Content: "I think the cause is..."},
 	}}
 	uc := &Usecase{summarizer: sum, cfg: Config{SummarizerModel: "glm-4-air", SummarizerTimeout: time.Second}}
-	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narrative body", 0)
+	fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narrative body", 0, "")
 	if fields.RootCause != "narrative body" {
 		t.Errorf("fallback root_cause = %q", fields.RootCause)
 	}
@@ -256,7 +256,7 @@ func TestExtractStructured_ConfidenceClamp(t *testing.T) {
 			Assistant: llm.Message{Role: "assistant",
 				Content: `{"root_cause":"x","confidence":` + fmtFloat(raw) + `}`}}}
 		uc := &Usecase{summarizer: sum, cfg: Config{SummarizerModel: "m", SummarizerTimeout: time.Second}}
-		fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narr", 0)
+		fields := uc.extractStructured(context.Background(), alertmodel.Incident{ID: 1}, "narr", 0, "")
 		if fields.Confidence == nil {
 			t.Errorf("raw=%v: confidence nil", raw)
 			continue

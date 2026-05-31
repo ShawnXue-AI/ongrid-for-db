@@ -45,6 +45,7 @@ import { hasGrafanaDrilldownConfig } from '@/lib/drilldown';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
 import { deleteSession, renameSession, type ChatSession } from '@/api/chat';
 import { listEdges, type EdgeRole } from '@/api/edges';
+import { onDevicesChanged } from '@/lib/events';
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUi();
@@ -70,23 +71,30 @@ export function Sidebar() {
 
   // Roles actually present in the user's fleet — drives which 设备 sub-
   // items appear. We don't render a role link for a role with 0 devices,
-  // and we drop 未分类 entirely (zero edges = empty section). Single
-  // listEdges() call on mount; lightweight enough not to need a store.
+  // and we drop 未分类 entirely (zero edges = empty section). Initial
+  // listEdges() on mount + refetch on the cross-component devices-changed
+  // event so RolesEditorModal saves surface here within a tick instead of
+  // requiring a full page reload.
   const [presentRoles, setPresentRoles] = useState<Set<EdgeRole>>(new Set());
   useEffect(() => {
     let cancelled = false;
-    void listEdges()
-      .then((r) => {
-        if (cancelled) return;
-        const present = new Set<EdgeRole>();
-        for (const e of r.items ?? []) {
-          for (const role of e.roles ?? []) present.add(role as EdgeRole);
-        }
-        setPresentRoles(present);
-      })
-      .catch(() => {});
+    const load = () => {
+      void listEdges()
+        .then((r) => {
+          if (cancelled) return;
+          const present = new Set<EdgeRole>();
+          for (const e of r.items ?? []) {
+            for (const role of e.roles ?? []) present.add(role as EdgeRole);
+          }
+          setPresentRoles(present);
+        })
+        .catch(() => {});
+    };
+    load();
+    const unsubscribe = onDevicesChanged(load);
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

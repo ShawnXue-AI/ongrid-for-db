@@ -1,4 +1,5 @@
 import { getRefreshToken, getToken, useAuth } from '@/store/auth';
+import { getLocale } from '@/i18n/locale';
 
 export class ApiError extends Error {
   status: number;
@@ -31,6 +32,11 @@ export async function request<T = unknown>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    // Tell the backend which language the operator's UI is in. Used by
+    // any LLM-driven endpoint (RCA worker, summarizers, future chat
+    // helpers) so the generated text matches the SPA. Convention:
+    // feedback_ai_output_locale — AI output language follows UI locale.
+    'Accept-Language': getLocale(),
     ...(opts.headers ?? {}),
   };
 

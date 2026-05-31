@@ -42,6 +42,27 @@ LEGACY_PREVIOUS=$STAGE_DIR/previous
 
 log() { logger -t ongrid-edge-upgrade "$*"; }
 
+# ----- Pre-start: ensure log-read group membership -------------------------
+#
+# install-edge.sh adds ongrid-edge to adm + systemd-journal so the logs
+# plugin (promtail) can read /var/log/* (root:adm 640) and the journal.
+# Bundle upgrades (ADR-024) DON'T re-run install-edge.sh, so a box that was
+# installed before that grant — or one whose groups got dropped — would
+# silently ship empty logs forever. Re-assert membership here: this hook
+# runs as root on every start (the unit's `+`-prefixed ExecStartPre), and
+# systemd resolves supplementary groups when it forks ExecStart, so a group
+# added now takes effect for the agent that starts moments later. Idempotent
+# (usermod -aG is a no-op if already a member).
+ensure_log_groups() {
+  id ongrid-edge >/dev/null 2>&1 || return 0
+  for grp in adm systemd-journal; do
+    if getent group "$grp" >/dev/null 2>&1; then
+      usermod -aG "$grp" ongrid-edge 2>/dev/null || true
+    fi
+  done
+}
+ensure_log_groups
+
 # ----- Mode 1: auto-rollback ------------------------------------------------
 #
 # Trigger: a prior boot ran apply (LAST_UPGRADE_AT exists) AND the agent

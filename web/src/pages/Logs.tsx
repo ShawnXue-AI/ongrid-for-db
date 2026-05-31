@@ -15,6 +15,7 @@ import {
 import { queryLogsRange, listLogLabels, type LokiStream } from '@/api/logs';
 import { ApiError } from '@/api/client';
 import { listEdges, type Edge, type EdgeRole } from '@/api/edges';
+import { onDevicesChanged } from '@/lib/events';
 import { Link } from 'react-router-dom';
 import { RoleSelect } from '@/components/ui';
 import { NLQueryHelper } from '@/components/NLQueryHelper';
@@ -119,9 +120,15 @@ function reEscape(s: string): string {
 // Build the effective LogQL: base query + facet matchers + include / exclude
 // line filters. Include/exclude use line filters (not label matchers) so
 // they work against the raw log line — what users actually care about.
+// Facet is one label matcher injected into the effective LogQL. op picks
+// between exact (`=`) and regex (`=~`). The role chip is the only multi-id
+// expansion we do today (role → device_id=~"id1|id2"); single-value chips
+// stay on `=` for clarity.
+type Facet = { label: string; value: string; op: '=' | '=~' };
+
 function buildEffectiveQuery(
   baseQuery: string,
-  facets: Record<string, string>,
+  facets: Facet[],
   include: string,
   exclude: string,
 ): string {
@@ -129,13 +136,13 @@ function buildEffectiveQuery(
 
   // Inject facet matchers. If the same label is already present in the
   // user's LogQL, replace it (so clicking a facet always wins).
-  for (const [label, value] of Object.entries(facets)) {
+  for (const { label, value, op } of facets) {
     if (!value) continue;
     const re = new RegExp(`${label}\\s*=~?\\s*"[^"]*"`);
     if (re.test(q)) {
-      q = q.replace(re, `${label}="${value}"`);
+      q = q.replace(re, `${label}${op}"${value}"`);
     } else {
-      q = q.replace(/^\s*\{/, `{${label}="${value}",`);
+      q = q.replace(/^\s*\{/, `{${label}${op}"${value}",`);
     }
   }
 
@@ -232,19 +239,44 @@ export default function LogsPage() {
   // promtail/filelog conventions are: `host` for collectors, `device_id`
   // for the manager-side enrichment) — we prefer device_id since the
   // edges API gives us that id directly.
-  const topbarFacets = useMemo(() => {
-    const out: Record<string, string> = {};
-    if (deviceFilter) out.device_id = deviceFilter;
-    if (roleFilter) out.role = roleFilter;
+  const topbarFacets = useMemo<Facet[]>(() => {
+    const out: Facet[] = [];
+    // deviceFilter (single id) wins over roleFilter (multi-device set)
+    // — explicit device pick is narrower and matches operator intent.
+    if (deviceFilter) {
+      out.push({ label: 'device_id', value: deviceFilter, op: '=' });
+    } else if (roleFilter) {
+      // Loki has no `role` label (promtail only stamps device_id, unit,
+      // identifier, ongrid_source, service_name, level — see
+      // edgeagent/plugins/logs/render.go). Expand role into the set of
+      // device_ids that have it: 1 → `=`, many → `=~"id|id|..."`. Zero
+      // matches gets an impossible `device_id="__no_match__"` so the
+      // query returns empty rather than silently dropping the filter and
+      // showing ALL logs — which is what made the role chip look broken.
+      const matching = edges
+        .filter((e) => Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
+        .map((e) => String(e.id));
+      if (matching.length === 0) {
+        out.push({ label: 'device_id', value: '__no_match__', op: '=' });
+      } else if (matching.length === 1) {
+        out.push({ label: 'device_id', value: matching[0], op: '=' });
+      } else {
+        out.push({ label: 'device_id', value: matching.join('|'), op: '=~' });
+      }
+    }
     if (filenameFilter) {
       // Try `unit` first (journald convention), fall back to `filename`
       // (file source). Picker offers both — value is the literal label
       // value. We disambiguate by sniffing rows.
       const looksLikeUnit = /\.(service|target|socket|timer|scope)$/.test(filenameFilter);
-      out[looksLikeUnit ? 'unit' : 'filename'] = filenameFilter;
+      out.push({
+        label: looksLikeUnit ? 'unit' : 'filename',
+        value: filenameFilter,
+        op: '=',
+      });
     }
     return out;
-  }, [deviceFilter, roleFilter, filenameFilter]);
+  }, [deviceFilter, roleFilter, filenameFilter, edges]);
 
   const effectiveQuery = useMemo(
     () => buildEffectiveQuery(committedQuery, topbarFacets, include, exclude),
@@ -369,18 +401,26 @@ export default function LogsPage() {
   // Load edge inventory once for the device dropdown. Best-effort —
   // failure just leaves the dropdown empty (operators can still type a
   // device_id directly into the LogQL box).
+  // Mount-fetch + subscribe to devices-changed: role chip expansion below
+  // depends on `edges` (role → device_id matcher), so a role edit on Edges
+  // page must propagate here, not just on a full page reload.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const r = await listEdges();
-        if (!cancelled) setEdges(r.items ?? []);
-      } catch {
-        // silent
-      }
-    })();
+    const load = () => {
+      void (async () => {
+        try {
+          const r = await listEdges();
+          if (!cancelled) setEdges(r.items ?? []);
+        } catch {
+          // silent
+        }
+      })();
+    };
+    load();
+    const unsubscribe = onDevicesChanged(load);
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

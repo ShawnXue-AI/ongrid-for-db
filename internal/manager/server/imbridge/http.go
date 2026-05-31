@@ -312,6 +312,7 @@ type appDTO struct {
 	VerifyToken        string `json:"verify_token,omitempty"`
 	EncryptKey         string `json:"encrypt_key,omitempty"`
 	AllowFrom          string `json:"allow_from,omitempty"`
+	DefaultLocale      string `json:"default_locale,omitempty"`
 	Enabled            bool   `json:"enabled"`
 	IdleTimeoutSeconds int    `json:"idle_timeout_seconds"`
 	CreatedAt          string `json:"created_at"`
@@ -329,6 +330,7 @@ func toAppDTO(a *model.ImApp) appDTO {
 		VerifyToken:        a.VerifyToken,
 		EncryptKey:         a.EncryptKey,
 		AllowFrom:          a.AllowFrom,
+		DefaultLocale:      a.DefaultLocale,
 		Enabled:            a.Enabled,
 		IdleTimeoutSeconds: a.IdleTimeoutSeconds,
 		CreatedAt:          a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
@@ -337,28 +339,30 @@ func toAppDTO(a *model.ImApp) appDTO {
 }
 
 type appPayload struct {
-	Provider    string `json:"provider"`
-	Mode        string `json:"mode"`
-	Name        string `json:"name"`
-	AppID       string `json:"app_id"`
-	AppSecret   string `json:"app_secret,omitempty"`
-	VerifyToken string `json:"verify_token,omitempty"`
-	EncryptKey  string `json:"encrypt_key,omitempty"`
-	AllowFrom   string `json:"allow_from,omitempty"`
-	Enabled     bool   `json:"enabled"`
+	Provider      string `json:"provider"`
+	Mode          string `json:"mode"`
+	Name          string `json:"name"`
+	AppID         string `json:"app_id"`
+	AppSecret     string `json:"app_secret,omitempty"`
+	VerifyToken   string `json:"verify_token,omitempty"`
+	EncryptKey    string `json:"encrypt_key,omitempty"`
+	AllowFrom     string `json:"allow_from,omitempty"`
+	DefaultLocale string `json:"default_locale,omitempty"`
+	Enabled       bool   `json:"enabled"`
 }
 
 func (p appPayload) toInput() bizbridge.AppInput {
 	return bizbridge.AppInput{
-		Provider:    p.Provider,
-		Mode:        p.Mode,
-		Name:        p.Name,
-		AppID:       p.AppID,
-		AppSecret:   p.AppSecret,
-		VerifyToken: p.VerifyToken,
-		EncryptKey:  p.EncryptKey,
-		AllowFrom:   p.AllowFrom,
-		Enabled:     p.Enabled,
+		Provider:      p.Provider,
+		Mode:          p.Mode,
+		Name:          p.Name,
+		AppID:         p.AppID,
+		AppSecret:     p.AppSecret,
+		VerifyToken:   p.VerifyToken,
+		EncryptKey:    p.EncryptKey,
+		AllowFrom:     p.AllowFrom,
+		DefaultLocale: p.DefaultLocale,
+		Enabled:       p.Enabled,
 	}
 }
 

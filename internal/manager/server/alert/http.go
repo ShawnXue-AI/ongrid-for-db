@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	bizaudit "github.com/ongridio/ongrid/internal/manager/biz/audit"
+	"github.com/ongridio/ongrid/internal/manager/biz/alert/investigator"
 	alertmodel "github.com/ongridio/ongrid/internal/manager/model/alert"
 	auditmodel "github.com/ongridio/ongrid/internal/manager/model/audit"
 	svc "github.com/ongridio/ongrid/internal/manager/service/alert"
@@ -68,6 +70,12 @@ type InvestigationReader interface {
 // Implemented by biz/alert/investigator.Usecase.ForceEnqueue.
 type InvestigationTrigger interface {
 	ForceEnqueue(ctx context.Context, incident *alertmodel.Incident) error
+	// ForceEnqueueWith carries per-request overrides; today the only one
+	// that flows through is opts.Locale (from Accept-Language) so a
+	// manual re-trigger returns a report in the operator's UI language.
+	// Implementations satisfy this by extending ForceEnqueue with the
+	// EnqueueOpts struct — see biz/alert/investigator.Usecase.
+	ForceEnqueueWith(ctx context.Context, incident *alertmodel.Incident, opts investigator.EnqueueOpts) error
 }
 
 // InvestigationReport is the wire-level shape the handler returns.
@@ -101,6 +109,13 @@ type Handler struct {
 	rules                 RuleService
 	investigations        InvestigationReader
 	investigationsTrigger InvestigationTrigger
+	// runtime knobs exposed as informational metadata via
+	// GET /v1/alerts/runtime-info — kept on the handler so the SPA can
+	// surface "this rule evaluates every 5min" without the operator
+	// having to read the env. Default zero values yield 0 in the API,
+	// which the SPA treats as "unknown / not surfaced".
+	evaluatorInterval time.Duration
+	notifyCooldown    time.Duration
 }
 
 // NewHandler accepts the three services (or one combined Service satisfying
@@ -108,6 +123,16 @@ type Handler struct {
 // excludes rule endpoints.
 func NewHandler(incidents IncidentService, channels ChannelService, rules RuleService) *Handler {
 	return &Handler{incidents: incidents, channels: channels, rules: rules}
+}
+
+// WithRuntime wires the alert pipeline's runtime knobs (evaluator tick
+// interval + notification cooldown) so GET /v1/alerts/runtime-info can
+// report them. Optional: a nil call leaves them at 0 and the API
+// reports zero-valued fields, which the SPA treats as "unknown".
+func (h *Handler) WithRuntime(evaluatorInterval, notifyCooldown time.Duration) *Handler {
+	h.evaluatorInterval = evaluatorInterval
+	h.notifyCooldown = notifyCooldown
+	return h
 }
 
 // WithInvestigations wires the read-only investigation reader used by
@@ -135,6 +160,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/alerts/incidents/{id}/ack", h.ackIncident)
 	r.Post("/v1/alerts/incidents/{id}/resolve", h.resolveIncident)
 	r.Post("/v1/alerts/incidents/{id}/silence", h.silenceIncident)
+	r.Get("/v1/alerts/runtime-info", h.getRuntimeInfo)
 
 	r.Get("/v1/notification-channels", h.listChannels)
 	r.Get("/v1/notification-channels/{id}", h.getChannel)
@@ -357,8 +383,11 @@ func (h *Handler) triggerIncidentInvestigation(w http.ResponseWriter, r *http.Re
 	// ForceEnqueue replaces any existing row (kills running worker if
 	// any), then spawns fresh. The SPA continues to GET the same
 	// incident's investigation endpoint and watches status transition
-	// pending → running → ready.
-	if err := h.investigationsTrigger.ForceEnqueue(r.Context(), incident); err != nil {
+	// pending → running → ready. Threads the operator's Accept-Language
+	// through so the regenerated report matches the current UI locale —
+	// see [[feedback_ai_output_locale]]: AI 输出语言跟随用户 UI locale.
+	opts := investigator.EnqueueOpts{Locale: localeFromRequest(r)}
+	if err := h.investigationsTrigger.ForceEnqueueWith(r.Context(), incident, opts); err != nil {
 		writeErr(w, fmt.Errorf("%w: %s", errs.ErrInvalid, err))
 		return
 	}
@@ -930,6 +959,50 @@ func errCode(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// localeFromRequest picks the operator's preferred locale from the
+// Accept-Language header (sent by the SPA from web/src/i18n/locale.ts).
+// Returns a primary subtag — "en" or "zh" — or "" when unset / unknown.
+// The investigator's Config.DefaultLocale catches the empty case for
+// auto-fire / backfill (no request context). See
+// [[feedback_ai_output_locale]] for the convention.
+func localeFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(r.Header.Get("Accept-Language"))
+	if raw == "" {
+		return ""
+	}
+	// Take the first language-tag; ignore q-values. "en-US,en;q=0.9" → "en-US".
+	first := strings.SplitN(raw, ",", 2)[0]
+	// Drop region: "en-US" → "en".
+	primary := strings.ToLower(strings.SplitN(strings.TrimSpace(first), "-", 2)[0])
+	switch primary {
+	case "en", "zh":
+		return primary
+	default:
+		return ""
+	}
+}
+
+// getRuntimeInfo exposes the alert pipeline's runtime cadence knobs so
+// the SPA can show operators "this rule evaluates every N minutes" without
+// the operator having to read env vars. Values come from env at startup
+// (ONGRID_ALERT_EVAL_INTERVAL / ONGRID_ALERT_COOLDOWN) — they're per-
+// deployment, not per-rule, so the SPA shows them as a global banner /
+// chip rather than per-rule editable fields.
+func (h *Handler) getRuntimeInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := callerFromRequest(r); !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	out := map[string]any{
+		"evaluator_interval_seconds": int64(h.evaluatorInterval / time.Second),
+		"notify_cooldown_seconds":    int64(h.notifyCooldown / time.Second),
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func errSlug(err error) string {

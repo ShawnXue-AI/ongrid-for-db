@@ -874,8 +874,8 @@ function PluginsTab({ edgeId }: { edgeId: number }) {
     <div className="space-y-4">
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-[12px] text-zinc-400">
         {tr(
-          'ongrid-edge 按 plugin runtime 模型组织能力。manager 推下来的 enabled + spec 由边端 supervisor 渲染成 plugin 原生 yaml（promtail.yaml / otelcol.yaml）后启停 subprocess。状态字段在 health 上报通道接通前先按 enabled 推断，crashed/restart_count 待边端 health snapshot 上报后再露出。',
-          'ongrid-edge organizes capabilities under the plugin runtime model. enabled + spec pushed from manager are rendered by the edge supervisor into the plugin\'s native yaml (promtail.yaml / otelcol.yaml) and the subprocess is started/stopped. Status is inferred from enabled until health-channel snapshots land; crashed / restart_count surface later.',
+          'ongrid-edge 按 plugin runtime 模型组织能力。manager 推下来的 enabled + spec 由边端 supervisor 渲染成 plugin 原生 yaml（promtail.yaml / otelcol.yaml）后启停 subprocess。状态来自边端心跳上报的 health snapshot：running / crashed / starting / stopped，crashed 时展示原因（如二进制缺失）与重启次数；边端离线或旧版本未上报时按 enabled 推断。',
+          'ongrid-edge organizes capabilities under the plugin runtime model. enabled + spec pushed from manager are rendered by the edge supervisor into the plugin\'s native yaml (promtail.yaml / otelcol.yaml) and the subprocess is started/stopped. Status comes from the edge\'s heartbeat health snapshot: running / crashed / starting / stopped — crashed shows the reason (e.g. missing binary) and restart count; falls back to inferring from enabled when the edge is offline or runs an older agent.',
         )}
       </div>
 
@@ -960,14 +960,27 @@ function PluginCard({
   // of the plugin row's enabled flag — show that explicitly so operators
   // don't think toggling it does anything.
   const isMetricsBuiltin = row.plugin_name === 'metrics';
-  // State pill: until health snapshot lands we infer from enabled.
-  // running = enabled, stopped = disabled. crashed will hook in later.
-  const stateLabel = isMetricsBuiltin ? 'built-in' : row.enabled ? 'running' : 'stopped';
+  // State pill: prefer the live heartbeat-reported health (running / crashed
+  // / starting / stopped). Falls back to inferring from enabled when the edge
+  // hasn't reported yet (offline / pre-introduction agent). This is what
+  // surfaces "logs: crashed — binary missing" instead of a silent failure.
+  const health = row.health;
+  const stateLabel = isMetricsBuiltin
+    ? 'built-in'
+    : health?.state
+      ? health.state
+      : row.enabled
+        ? 'running'
+        : 'stopped';
   const stateStyle = isMetricsBuiltin
     ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
-    : row.enabled
-      ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
-      : 'bg-zinc-700/40 text-zinc-400 ring-zinc-600';
+    : stateLabel === 'crashed'
+      ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30'
+      : stateLabel === 'running'
+        ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
+        : stateLabel === 'starting'
+          ? 'bg-amber-500/10 text-amber-300 ring-amber-500/30'
+          : 'bg-zinc-700/40 text-zinc-400 ring-zinc-600';
 
   const toggle = async () => {
     await onSave({ enabled: !row.enabled, spec: row.spec });
@@ -1005,6 +1018,17 @@ function PluginCard({
                   )
                 : meta.hint}
             </div>
+            {!isMetricsBuiltin && health?.last_error && (
+              <div
+                className="mt-0.5 truncate text-[11px] text-rose-400"
+                title={health.last_error}
+              >
+                {health.last_error}
+                {health.restart_count
+                  ? tr(` · 重启 ${health.restart_count} 次`, ` · ${health.restart_count} restarts`)
+                  : ''}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -1363,14 +1387,15 @@ function LogsSpecForm({
   onChange(next: Record<string, unknown>): void;
 }) {
   const { tr } = useI18n();
-  // Default to file-only sources for new edges. journald is opt-in
-  // (systemd-only host coverage, doesn't see container/user-mode logs,
-  // noisy on most distros). The render template also defaults
-  // enable_journald=false so existing edges with no setting are
-  // unchanged.
+  // journald is the default source (systemd-journald is universal on
+  // systemd hosts, self-rotating, and tags each entry with its `unit` so
+  // services are cleanly separable). Mirrors the render template default
+  // (enable_journald true unless explicitly set false) — so an unset spec
+  // shows the box checked. Operators opt out (→ syslog file fallback) or
+  // add file_paths for app-specific logs.
   const journaldUnits = asStringArray(draft.journald_units);
   const filePaths = asStringArray(draft.file_paths);
-  const enableJournald = draft.enable_journald === true;
+  const enableJournald = draft.enable_journald !== false;
   const extraLabels = asStringMap(draft.extra_labels);
   const labelEntries = Object.entries(extraLabels).sort(([a], [b]) => a.localeCompare(b));
 
@@ -1391,8 +1416,8 @@ function LogsSpecForm({
         values={filePaths}
         onChange={(next) => onChange({ ...draft, file_paths: next })}
         hint={tr(
-          '文件 tail glob；promtail static_configs.__path__。新建时建议预填 /var/log/syslog 与 /var/log/messages，覆盖大部分 distro 的系统日志。',
-          'File tail glob (promtail static_configs.__path__). For new edges, pre-fill /var/log/syslog and /var/log/messages to cover most distros.',
+          '应用专属日志文件的 tail glob（promtail __path__）。系统日志默认走下方 journald，不必在此填 /var/log/syslog；这里留给 nginx access、应用自有日志文件等。',
+          'Tail glob for app-specific log files (promtail __path__). System logs come from journald (on by default below) — no need to add /var/log/syslog here; use this for nginx access logs, app log files, etc.',
         )}
       />
       <label className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3 text-xs text-zinc-300">
@@ -1403,9 +1428,9 @@ function LogsSpecForm({
           className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-900 accent-emerald-500"
         />
         <span>
-          <span className="block font-medium text-zinc-100">{tr('同时采集 journald (systemd 单元日志)', 'Also collect journald (systemd unit logs)')}</span>
+          <span className="block font-medium text-zinc-100">{tr('采集 journald (systemd 单元日志) — 默认开', 'Collect journald (systemd unit logs) — on by default')}</span>
           <span className="mt-0.5 block text-[11px] text-zinc-500">
-            {tr('采集 systemd 单元日志（PRIORITY / _SYSTEMD_UNIT）。仅 systemd 管理的服务可见，容器/用户态进程不在内。', 'Collects systemd unit logs (PRIORITY / _SYSTEMD_UNIT). Only systemd-managed services are visible — container / user-mode processes are not included.')}
+            {tr('默认日志源:每条按 unit 标签区分服务,自带轮转,systemd 系普遍可用。关掉则回退 tail /var/log/syslog。', 'Default log source: each entry is tagged by `unit` so services are separable, self-rotating, available on all systemd hosts. Turn off to fall back to tailing /var/log/syslog.')}
           </span>
         </span>
       </label>

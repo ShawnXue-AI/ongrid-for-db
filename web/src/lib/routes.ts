@@ -45,7 +45,8 @@ const ROUTE_DEFS: RouteDef[] = [
 
   { path: '/settings/integrations', zh: '设置 / 集成', en: 'Settings / Integrations', keywords: ['settings', 'integrations', 'shezhi'], group: '设置' },
   { path: '/settings/llm', zh: '设置 / LLM', en: 'Settings / LLM', keywords: ['llm', 'model', 'moxing'], group: '设置' },
-  { path: '/settings/communications', zh: '设置 / 通知', en: 'Settings / Notifications', keywords: ['notifications', 'tongzhi'], group: '设置' },
+  { path: '/settings/notifications', zh: '设置 / 通知', en: 'Settings / Notifications', keywords: ['notifications', 'tongzhi', 'communications'], group: '设置' },
+  { path: '/settings/channels', zh: '设置 / 渠道', en: 'Settings / Channels', keywords: ['channels', 'qudao', 'bots', 'im'], group: '设置' },
   { path: '/settings/preferences', zh: '设置 / 偏好', en: 'Settings / Preferences', keywords: ['preferences', 'pianhao'], group: '设置' },
 
   { path: '/admin/users', zh: '用户管理 / 用户', en: 'Admin / Users', keywords: ['users', 'yonghu', 'admin'], group: '用户管理' },

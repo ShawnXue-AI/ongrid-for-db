@@ -52,10 +52,10 @@ const TYPE_CARDS: TypeMeta[] = [
     type: 'feishu',
     group: 'cn',
     labelZh: '飞书',
-    labelEn: 'Feishu',
+    labelEn: 'Larksuite',
     icon: MessageSquareShare,
     hintZh: '飞书自定义机器人 webhook，支持签名校验。',
-    hintEn: 'Feishu custom-bot webhook; supports signature verification.',
+    hintEn: 'Larksuite custom-bot webhook; supports signature verification.',
     endpointPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxx',
   },
   {
@@ -125,7 +125,7 @@ function orderCardsByLocale(locale: string): TypeMeta[] {
 
 type Toast = { kind: 'ok' | 'err'; text: string } | null;
 
-export default function SettingsCommunications() {
+export default function SettingsNotifications() {
   const { tr, locale } = useI18n();
   const orderedCards = useMemo(() => orderCardsByLocale(locale), [locale]);
   const [items, setItems] = useState<Channel[]>([]);
@@ -539,6 +539,19 @@ function ChannelEditorModal({
             }
             className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
+          {(form.type === 'slack' || form.type === 'wecom') && (
+            <div className="mt-1 text-[11px] text-zinc-500">
+              {form.type === 'slack'
+                ? tr(
+                    'Slack incoming webhook 的凭证就是 endpoint URL 本身，secret 字段会被忽略，可以留空。',
+                    'Slack incoming webhooks use the URL itself as the credential; the secret field is ignored and can be left blank.',
+                  )
+                : tr(
+                    '企业微信群机器人 key 已经在 endpoint URL 里，secret 字段会被忽略，可以留空。',
+                    'WeCom group-bot keys are embedded in the endpoint URL; the secret field is ignored and can be left blank.',
+                  )}
+            </div>
+          )}
         </Field>
         <label className="inline-flex items-center gap-2 text-xs text-zinc-300">
           <input

@@ -200,26 +200,76 @@ func (b *Bridge) HandleInbound(ctx context.Context, sender Sender, msg InboundMe
 	//    would dirty the brand-new session.
 	if wantNew {
 		_, _ = sender.SendText(ctx, msg.ChatID, msg.ReceiveIDType,
-			"✦ 已开启新会话。直接说出问题，我从头听。")
+			localizeReply(app.DefaultLocale, replyNewSession))
 		return nil
 	}
 
 	// 3. Placeholder for progressive editing.
-	placeholder, err := sender.SendText(ctx, msg.ChatID, msg.ReceiveIDType, "✦ 思考中…")
+	placeholder, err := sender.SendText(ctx, msg.ChatID, msg.ReceiveIDType,
+		localizeReply(app.DefaultLocale, replyThinking))
 	if err != nil {
 		b.log.Warn("placeholder send failed; falling back to one-shot reply", slog.Any("err", err))
 	}
 
-	// 4. Run the agent with a throttled editor.
-	editor := newStreamEditor(ctx, sender, msg.ChatID, msg.ReceiveIDType, placeholder, b.log)
+	// 4. Run the agent with a throttled editor. Append a language directive
+	//    when the channel pinned a locale so the agent replies in that
+	//    language regardless of persona / model defaults. Empty locale =
+	//    auto = LLM mirrors the user. See [[feedback_ai_output_locale]].
+	editor := newStreamEditor(ctx, sender, msg.ChatID, msg.ReceiveIDType, placeholder, app.DefaultLocale, b.log)
 	emit := func(e agent.Event) {
 		editor.OnEvent(e)
 	}
-	if err := b.agent.StreamMessage(ctx, thread.OngridSessionID, msg.Text, emit); err != nil {
+	userContent := msg.Text
+	if d := localeDirective(app.DefaultLocale); d != "" {
+		userContent = msg.Text + "\n\n" + d
+	}
+	if err := b.agent.StreamMessage(ctx, thread.OngridSessionID, userContent, emit); err != nil {
 		_ = editor.OnFatal(err)
 		return fmt.Errorf("stream message: %w", err)
 	}
 	return editor.Flush()
+}
+
+// localeDirective renders the language hint we append to the user content
+// before handing to the agent. Empty locale = "" (no directive, LLM
+// mirrors). Mirrors the RCA-side helper in alert/investigator but framed
+// for chat replies, not RCA reports — see [[feedback_ai_output_locale]].
+func localeDirective(locale string) string {
+	switch strings.ToLower(strings.TrimSpace(locale)) {
+	case "en":
+		return "(LANGUAGE: Respond in English regardless of the language the system prompt or persona examples use.)"
+	case "zh":
+		return "（LANGUAGE：请用简体中文回复，无论 system prompt 或 persona 中的示例用什么语言。）"
+	default:
+		return ""
+	}
+}
+
+// IM-bridge canned strings. Plain strings rather than i18n constants so the
+// package stays self-contained; pick the locale at the call site.
+const (
+	replyNewSession = "newSession"
+	replyThinking   = "thinking"
+)
+
+func localizeReply(locale string, key string) string {
+	switch locale {
+	case "en":
+		switch key {
+		case replyNewSession:
+			return "✦ New session started. Go ahead — I'll listen from scratch."
+		case replyThinking:
+			return "✦ Thinking…"
+		}
+	}
+	// Default (empty locale / zh): Chinese, matches the historical behaviour.
+	switch key {
+	case replyNewSession:
+		return "✦ 已开启新会话。直接说出问题，我从头听。"
+	case replyThinking:
+		return "✦ 思考中…"
+	}
+	return ""
 }
 
 // sessionLabel is the chat-history-page title for ongrid-side

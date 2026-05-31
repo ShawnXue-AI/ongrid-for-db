@@ -42,6 +42,8 @@ import {
   setRuleEnabled,
   updateRule,
   localizedRuleName,
+  getAlertRuntimeInfo,
+  type AlertRuntimeInfo,
   type Channel,
   type Rule,
   type RuleCondition,
@@ -76,6 +78,70 @@ const SOURCE_PILL_STYLE: Record<SignalSource, string> = {
   log: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30',
   trace: 'bg-violet-500/10 text-violet-300 ring-violet-500/30',
 };
+
+// PromqlWindowChips parses [Xm] / [Xh] / [Xs] duration windows out of a
+// PromQL expression and renders them as informational chips. metric_raw
+// rules have no separate Window form field — the window lives inside
+// rate(), increase(), avg_over_time() etc. inside the expression. Surfacing
+// the parsed values here lets the operator see at a glance "this rule
+// averages over a 5min window" without re-reading the expression. Pure
+// display, not editable — to change the window the operator edits the
+// expression itself.
+function PromqlWindowChips({ expr }: { expr: string }) {
+  // Match `[5m]` / `[1h]` / `[30s]` / `[1d]` etc. Optional decimal not
+  // common in PromQL but tolerated. We pick out unique windows in the
+  // order they appear so a `rate(...[5m]) - rate(...[1m])` shows both.
+  const windows = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const re = /\[(\d+(?:\.\d+)?)([smhdwy])\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(expr)) !== null) {
+      const tok = `${m[1]}${m[2]}`;
+      if (!seen.has(tok)) {
+        seen.add(tok);
+        out.push(tok);
+      }
+    }
+    return out;
+  }, [expr]);
+  const { tr } = useI18n();
+  if (windows.length === 0) {
+    return (
+      <div className="text-[11px] text-zinc-500">
+        ⏱ {tr('该表达式没有 [窗口] —— 走 Prom 的瞬时查询(每次 evaluator tick 抓一个点)。', 'No [window] in this expression — Prom evaluates instantly (one sample per evaluator tick).')}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-[11px] text-zinc-500">
+      ⏱ {tr('表达式里的窗口:', 'Windows in this expression:')}
+      {windows.map((w) => (
+        <span
+          key={w}
+          className="inline-flex items-center rounded bg-sky-500/10 px-1.5 py-0.5 text-sky-200 ring-1 ring-inset ring-sky-500/30"
+          title={tr(
+            `PromQL 的 [${w}] —— 在该函数(rate/increase/avg_over_time 等)调用里回看 ${w} 长度的数据。要改窗口直接改上方表达式。`,
+            `PromQL [${w}] window — the enclosing rate/increase/avg_over_time call looks back ${w}. To change it, edit the expression above.`,
+          )}
+        >
+          [{w}]
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// humanDur compacts a duration-in-seconds to a chip-friendly string.
+// 300 → "5min"; 600 → "10min"; 30 → "30s"; 3600 → "1h"; 5400 → "1.5h".
+function humanDur(sec: number): string {
+  if (sec <= 0) return '0';
+  if (sec % 3600 === 0) return `${sec / 3600}h`;
+  if (sec >= 3600) return `${(sec / 3600).toFixed(1)}h`;
+  if (sec % 60 === 0) return `${sec / 60}min`;
+  if (sec >= 60) return `${(sec / 60).toFixed(1)}min`;
+  return `${sec}s`;
+}
 
 function describeKind(kind: RuleKind | string): {
   meta?: RuleKindMeta;
@@ -139,6 +205,17 @@ export default function AlertRulesPage() {
   } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Rule | null>(null);
   const [showPresets, setShowPresets] = useState(false);
+  // Runtime cadence (evaluator + cooldown) — global, per-deployment.
+  // Surfaced as a chip in the header so the operator knows how often
+  // each rule will run / re-notify without having to read env vars.
+  const [runtime, setRuntime] = useState<AlertRuntimeInfo | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getAlertRuntimeInfo()
+      .then((r) => { if (!cancelled) setRuntime(r); })
+      .catch(() => { /* non-fatal: chip just stays hidden */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchRules = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -194,6 +271,20 @@ export default function AlertRulesPage() {
                 <span className="ml-1 inline-flex items-center rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 ring-1 ring-inset ring-zinc-700">
                   {tr(`自定义 ${stats.total - stats.builtin}`, `${stats.total - stats.builtin} custom`)}
                 </span>
+                {runtime && runtime.evaluator_interval_seconds > 0 && (
+                  <span
+                    className="ml-1 inline-flex items-center gap-1 rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-200 ring-1 ring-inset ring-sky-500/30"
+                    title={tr(
+                      `evaluator 每 ${humanDur(runtime.evaluator_interval_seconds)} 跑一次全量规则;通知 cooldown ${humanDur(runtime.notify_cooldown_seconds)}。出厂默认 5min / 10min,可由 ONGRID_ALERT_EVAL_INTERVAL / ONGRID_ALERT_COOLDOWN 覆盖。`,
+                      `Evaluator runs every ${humanDur(runtime.evaluator_interval_seconds)}; notification cooldown ${humanDur(runtime.notify_cooldown_seconds)}. Factory defaults 5min / 10min, override via ONGRID_ALERT_EVAL_INTERVAL / ONGRID_ALERT_COOLDOWN.`,
+                    )}
+                  >
+                    ⏱ {tr(
+                      `每 ${humanDur(runtime.evaluator_interval_seconds)} 评估 · 通知 cooldown ${humanDur(runtime.notify_cooldown_seconds)}`,
+                      `Eval ${humanDur(runtime.evaluator_interval_seconds)} · Notify cd ${humanDur(runtime.notify_cooldown_seconds)}`,
+                    )}
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex gap-2">
@@ -1187,6 +1278,7 @@ function KindSpecificFields({
         <div className="text-[11px] text-zinc-500">
           {tr('表达式自身就是谓词。返回非空向量时触发。多条件用 ', 'The expression is the predicate; the rule fires when it returns a non-empty vector. Combine conditions with ')}<code className="font-mono text-zinc-400">and</code> / <code className="font-mono text-zinc-400">or</code>{tr(' 连接。', '.')}
         </div>
+        <PromqlWindowChips expr={(form.spec?.expr as string) ?? ''} />
       </div>
     );
   }
@@ -1711,7 +1803,7 @@ function KindPicker({
 // save, so storage shape is unchanged.)
 
 // CHANNEL_TYPE_LABEL maps backend enum strings to friendly Chinese
-// names. Mirrors the labels in pages/settings/Communications.tsx so a
+// names. Mirrors the labels in pages/settings/Notifications.tsx so a
 // rule editor and the channel manager show the same words.
 const CHANNEL_TYPE_LABEL_ZH: Record<string, string> = {
   feishu: '飞书',
@@ -1755,7 +1847,7 @@ const CHANNEL_TYPE_ORDER: Array<{ type: string; icon: typeof Webhook }> = [
 //
 // Per-row UX:
 //   - Header: type icon + Chinese label + instance count + 「配置 ↗」
-//     deep-link to /settings/communications.
+//     deep-link to /settings/notifications.
 //   - Toggle the header checkbox to bulk-select / deselect every
 //     instance of that type. Single-instance types add the lone id;
 //     multi-instance types add ALL ids (operator can refine via the
@@ -1806,17 +1898,135 @@ function ChannelsField({
     else onChange([...selectedIds, id]);
   };
 
+  // Master "default" checkbox: checked ↔ selectedIds is empty ↔ backend
+  // falls back to "every enabled channel whose severity floor / scope
+  // matches" (router.go ChannelsFor). Storage shape stays empty-array =
+  // use defaults; the master checkbox is just a visible handle on that
+  // semantics so 0 ticks doesn't look like 0 notifications.
+  const fallbackChannels = useMemo(
+    () => channels.filter((c) => c.enabled),
+    [channels],
+  );
+  // Two-mode picker: "default" or "custom". Storage stays the same:
+  // empty selectedIds = backend fallback (router.go ChannelsFor 全 fan-out);
+  // non-empty = explicit pin. The local `customOverride` flag lets the
+  // operator un-tick every sub-item without the master flipping back to
+  // default — because "I picked nothing on purpose" and "I haven't decided
+  // yet" look identical in storage (both []), so without this flag the
+  // moment the last tick goes the master would re-engage and re-lock the
+  // sub-items. Flag is per-session; on close+reopen we return to the
+  // storage-driven semantics so the persisted shape always wins.
+  const [customOverride, setCustomOverride] = useState(false);
+  const isDefault = !customOverride && selectedIds.length === 0;
+  const toggleDefault = () => {
+    if (isDefault) {
+      // Switch to custom mode with EVERY enabled channel auto-picked so
+      // the operator can start un-ticking the ones they want to drop,
+      // instead of having to re-tick everything from scratch. Effective
+      // delivery is unchanged at this instant — same channels fire —
+      // but now the rule has an explicit pin so adding a new channel
+      // later won't silently widen the blast radius.
+      setCustomOverride(true);
+      onChange(fallbackChannels.map((c) => c.id));
+    } else {
+      // Back to default mode = clear pin = backend goes back to fallback.
+      setCustomOverride(false);
+      onChange([]);
+    }
+  };
+
   return (
     <Field label={tr('通知方式', 'Notification channels')}>
       <div className="space-y-1.5">
+        {/* Master "默认" row. Checked = empty selectedIds (use fallback).
+            Lists the actual channels that would fire so 0-tick != 0 notify. */}
+        <div
+          className={cn(
+            'rounded-md border px-2.5 py-2 transition',
+            isDefault
+              ? 'border-accent/40 bg-accent/5'
+              : 'border-zinc-800 bg-zinc-950/40',
+          )}
+        >
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={isDefault}
+              onChange={toggleDefault}
+              className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900"
+            />
+            <span className={cn('font-medium', isDefault ? 'text-accent' : 'text-zinc-300')}>
+              {tr('默认', 'Default')}
+            </span>
+            <span className="text-[10px] text-zinc-500">
+              {tr(
+                '（命中全部"已启用 + severity 达标"的渠道）',
+                '(fire to every enabled channel whose severity floor matches)',
+              )}
+            </span>
+          </label>
+          {isDefault && (
+            <div className="mt-1.5 flex flex-wrap gap-1 pl-5">
+              {fallbackChannels.length === 0 ? (
+                <span className="text-[10px] text-zinc-500">
+                  {tr(
+                    '当前没有任何已启用的渠道。去 设置 → 通知 配一个。',
+                    'No enabled channels yet. Configure one in Settings → Notifications.',
+                  )}
+                </span>
+              ) : (
+                fallbackChannels.map((c) => (
+                  <span
+                    key={c.id}
+                    className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent"
+                    title={tr(
+                      `当前默认会命中:${c.name} (${c.type})`,
+                      `Currently fires to ${c.name} (${c.type})`,
+                    )}
+                  >
+                    {c.name}
+                    <span className="opacity-60">· {c.type}</span>
+                  </span>
+                ))
+              )}
+            </div>
+          )}
+          {!isDefault && selectedIds.length > 0 && (
+            <div className="mt-1 pl-5 text-[10px] text-zinc-500">
+              {tr(
+                '已切到自定义模式 — 下面已自动勾上全部渠道,你可以取消不想要的;要回默认就勾上方框。',
+                'Custom mode — all channels are pre-ticked below; untick the ones you don\'t want. Tick the box above to revert to default.',
+              )}
+            </div>
+          )}
+          {!isDefault && selectedIds.length === 0 && (
+            <div className="mt-1 pl-5 text-[10px] text-amber-300/80">
+              {tr(
+                '⚠ 自定义模式下当前没勾任何渠道,但保存后等效"默认"(后端 fallback 仍会 fan-out 到全部已启用渠道)。要真的静默该规则,改用上方"禁用规则"开关。',
+                '⚠ Nothing ticked in custom mode — on save this is indistinguishable from default (backend fallback still fans out to all enabled channels). To actually silence this rule, use the "Enabled" toggle above.',
+              )}
+            </div>
+          )}
+        </div>
+        {/* Per-type rows. In default mode they render as visually checked
+            but locked (rowDisabled) so the operator can't half-pick from
+            inside a state the master doesn't represent. Clicking master
+            off auto-fills selectedIds with every enabled channel — the
+            current visual state stays put, but it's now editable. */}
+        <div className="space-y-1.5">
         {CHANNEL_TYPE_ORDER.map(({ type, icon: Icon }) => {
           const instances = byType[type] ?? [];
           const total = instances.length;
+          // While master "default" is on, render every per-type row as
+          // visually checked (the resolver fallback fans out to all enabled
+          // channels) and disable interaction so it's unambiguous that the
+          // operator has to flip master off to start narrowing.
           const selectedHere = instances.filter((c) => selectedSet.has(c.id));
           const selectedCount = selectedHere.length;
           const enabledCount = instances.filter((c) => c.enabled).length;
-          const headerChecked = selectedCount > 0;
-          const headerIndeterminate = selectedCount > 0 && selectedCount < enabledCount;
+          const headerChecked = isDefault ? enabledCount > 0 : selectedCount > 0;
+          const headerIndeterminate = !isDefault && selectedCount > 0 && selectedCount < enabledCount;
+          const rowDisabled = isDefault; // master overrides per-type interaction
           const isOpen = expanded[type] ?? false;
           const noInstances = total === 0;
 
@@ -1839,11 +2049,13 @@ function ChannelsField({
                     // visually distinguish partial selections.
                     if (el) el.indeterminate = headerIndeterminate;
                   }}
-                  disabled={noInstances || enabledCount === 0}
-                  onChange={() => toggleType(type)}
-                  className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 disabled:opacity-40"
+                  disabled={rowDisabled || noInstances || enabledCount === 0}
+                  onChange={() => !rowDisabled && toggleType(type)}
+                  className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 disabled:opacity-60"
                   title={
-                    noInstances
+                    rowDisabled
+                      ? tr('当前为默认模式 — 取消上方"默认"勾选才能单独选择', 'Default mode is on — uncheck "Default" above to pick individually')
+                      : noInstances
                       ? tr('尚未配置该通道，先去设置→通信通道', 'No channel of this type yet — go to Settings → Notifications')
                       : enabledCount === 0
                       ? tr('该类型下所有实例均已停用', 'All instances of this type are disabled')
@@ -1872,7 +2084,7 @@ function ChannelsField({
                 <div className="ml-auto flex items-center gap-2 text-[10px]">
                   {noInstances ? (
                     <Link
-                      to="/settings/communications"
+                      to="/settings/notifications"
                       className="text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
                     >
                       {tr('前往配置 ↗', 'Configure ↗')}
@@ -1931,8 +2143,15 @@ function ChannelsField({
                 <div className="border-t border-zinc-800/70 bg-zinc-950/40 px-2.5 py-2">
                   <div className="space-y-1">
                     {instances.map((c) => {
-                      const checked = selectedSet.has(c.id);
+                      // In default mode, every enabled instance is
+                      // "implicitly checked" by the resolver fallback.
+                      // Render that visually + lock interaction so the
+                      // operator can't half-pick from inside a mode the
+                      // master doesn't represent.
+                      const realChecked = selectedSet.has(c.id);
+                      const checked = isDefault ? c.enabled : realChecked;
                       const disabled = !c.enabled;
+                      const lockedByMaster = isDefault;
                       return (
                         <label
                           key={c.id}
@@ -1940,18 +2159,26 @@ function ChannelsField({
                             'flex items-center gap-2 rounded px-1.5 py-1 text-[11px] transition',
                             disabled
                               ? 'cursor-not-allowed opacity-50'
-                              : checked
+                              : lockedByMaster
+                              ? 'cursor-not-allowed bg-accent/5'
+                              : realChecked
                               ? 'cursor-pointer bg-accent/10'
                               : 'cursor-pointer hover:bg-zinc-900',
                           )}
-                          title={disabled ? tr('该实例已停用，去 设置→通信通道 启用', 'Instance disabled — enable it under Settings → Notifications') : undefined}
+                          title={
+                            disabled
+                              ? tr('该实例已停用，去 设置→通信通道 启用', 'Instance disabled — enable it under Settings → Notifications')
+                              : lockedByMaster
+                              ? tr('当前为默认模式 — 取消上方"默认"勾选才能单独取消', 'Default mode is on — uncheck "Default" above to untick this individually')
+                              : undefined
+                          }
                         >
                           <input
                             type="checkbox"
                             checked={checked && !disabled}
-                            disabled={disabled}
-                            onChange={() => !disabled && toggleInstance(c.id)}
-                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 disabled:opacity-40"
+                            disabled={disabled || lockedByMaster}
+                            onChange={() => !disabled && !lockedByMaster && toggleInstance(c.id)}
+                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 disabled:opacity-60"
                           />
                           <span
                             className={cn(
@@ -1985,6 +2212,7 @@ function ChannelsField({
             </div>
           );
         })}
+        </div>
       </div>
       <div className="mt-1.5 flex items-center justify-between text-[11px] text-zinc-500">
         <span>
@@ -1993,7 +2221,7 @@ function ChannelsField({
             : tr('未勾选 — 由全局级别/范围筛选自动路由', "None selected — routed by global severity / scope filters")}
         </span>
         <Link
-          to="/settings/communications"
+          to="/settings/notifications"
           className="text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
         >
           {tr('管理通道 →', 'Manage channels →')}

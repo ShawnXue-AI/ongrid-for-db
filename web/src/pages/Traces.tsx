@@ -288,6 +288,18 @@ export default function TracesPage() {
     setHasSearched(true);
   };
 
+  // Selecting a service/operation searches immediately (no separate 查询
+  // click): commit the pick into `submitted` (keeping current range +
+  // TraceQL) and arm hasSearched so the fetch effect fires. A typed
+  // trace-id still wins, so skip when a trace-id lookup is in progress.
+  const pickServiceOperation = (svc: string, op: string) => {
+    setServiceFilter(svc);
+    setOperationFilter(op);
+    if (traceIdInput.trim()) return;
+    setSubmitted({ range, service: svc, operation: op, traceQL });
+    setHasSearched(true);
+  };
+
   // "深度分析 → Grafana" deep-link to Tempo Explore. The TraceQL we
   // build mirrors what useTempoExploreUrl in IncidentDetail does — when
   // the user has typed a TraceQL we forward it verbatim, otherwise we
@@ -382,7 +394,7 @@ export default function TracesPage() {
             </span>
             <select
               value={serviceFilter}
-              onChange={(e) => setServiceFilter(e.target.value)}
+              onChange={(e) => pickServiceOperation(e.target.value, operationFilter)}
               className={INPUT_BASE}
             >
               <option value="">{tr('全部', 'All')}</option>
@@ -398,7 +410,7 @@ export default function TracesPage() {
             </span>
             <select
               value={operationFilter}
-              onChange={(e) => setOperationFilter(e.target.value)}
+              onChange={(e) => pickServiceOperation(serviceFilter, e.target.value)}
               className={cn(INPUT_BASE, 'font-mono')}
             >
               <option value="">{tr('全部', 'All')}</option>

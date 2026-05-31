@@ -3,6 +3,7 @@ package imbridge
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ type streamEditor struct {
 	chatID        string
 	receiveIDType string
 	messageID     string // initially the placeholder id; "" if placeholder send failed
+	locale        string // app.DefaultLocale, drives the OnFatal apology language
 	log           *slog.Logger
 
 	mu     sync.Mutex
@@ -47,13 +49,14 @@ const (
 	editCharsTrigger = 200
 )
 
-func newStreamEditor(ctx context.Context, sender Sender, chatID, receiveIDType, placeholderMessageID string, log *slog.Logger) *streamEditor {
+func newStreamEditor(ctx context.Context, sender Sender, chatID, receiveIDType, placeholderMessageID, locale string, log *slog.Logger) *streamEditor {
 	return &streamEditor{
 		ctx:           ctx,
 		sender:        sender,
 		chatID:        chatID,
 		receiveIDType: receiveIDType,
 		messageID:     placeholderMessageID,
+		locale:        locale,
 		log:           log,
 	}
 }
@@ -95,8 +98,12 @@ func (e *streamEditor) OnEvent(ev agent.Event) {
 // replace the placeholder with the error so the IM user gets a clear
 // signal instead of a stale "思考中…".
 func (e *streamEditor) OnFatal(err error) error {
+	prefix := "⚠ 助手执行失败："
+	if strings.ToLower(strings.TrimSpace(e.locale)) == "en" {
+		prefix = "⚠ Assistant failed: "
+	}
 	e.mu.Lock()
-	e.buf = "⚠ 助手执行失败：" + err.Error()
+	e.buf = prefix + err.Error()
 	e.mu.Unlock()
 	return e.flush()
 }

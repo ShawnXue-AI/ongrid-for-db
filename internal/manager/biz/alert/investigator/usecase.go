@@ -43,7 +43,15 @@ type Repo interface {
 	// (POST /v1/alerts/incidents/{id}/investigation always force-overwrites).
 	GetByIncident(ctx context.Context, incidentID uint64) (*alertmodel.InvestigationReport, error)
 	DeleteByIncident(ctx context.Context, incidentID uint64) error
+	// ListIncidentsWithoutReport powers the boot compensation pass — see
+	// BackfillUnstartedIncidents. Returns incident IDs in [since, now)
+	// that have no investigation_reports row at all, ordered freshest first.
+	ListIncidentsWithoutReport(ctx context.Context, since time.Time, limit int) ([]uint64, error)
 }
+
+// IncidentLoader is the narrow seam BackfillUnstartedIncidents uses to
+// re-hydrate full incident rows by id. Satisfied by alert.Usecase.GetIncident.
+type IncidentLoader func(ctx context.Context, id uint64) (*alertmodel.Incident, error)
 
 // ReadyFields mirrors store.ReportReadyFields so the biz layer can
 // pass structured outputs without importing the store package. The
@@ -142,6 +150,15 @@ type Config struct {
 	// than queueing, so the operator sees the cap immediately
 	// instead of an unbounded backlog.
 	MaxConcurrent int
+
+	// DefaultLocale is the language the auto-fire / backfill path uses
+	// for the worker + extractor prompts. Manual triggers can override
+	// per-request via the HTTP handler's Accept-Language → ForceEnqueue.
+	// "en" → "Respond in English.", "zh" → "请用中文回答。", empty →
+	// no directive (persona's language wins, currently Chinese). Set via
+	// ONGRID_DEFAULT_LOCALE env at boot — see [[feedback_ai_output_locale]]:
+	// AI 输出语言跟随用户 UI locale.
+	DefaultLocale string
 }
 
 // Usecase is the orchestrator.
@@ -285,10 +302,29 @@ func (uc *Usecase) InvestigateAsync(incident *alertmodel.Incident) {
 	uc.Enqueue(context.Background(), incident)
 }
 
+// EnqueueOpts carries per-call overrides for Enqueue. Empty fields fall
+// back to Config defaults. Right now only Locale is plumbed, but the type
+// is here so callers grow it without breaking existing call sites.
+type EnqueueOpts struct {
+	// Locale overrides Config.DefaultLocale for this run only ("en", "zh").
+	// Empty → use Config.DefaultLocale. HTTP handler sets it from
+	// Accept-Language so a manual trigger's report comes back in the
+	// operator's current UI language; auto-fire / backfill leaves it
+	// empty and gets the site default.
+	Locale string
+}
+
 // Enqueue is the lower-level entry that takes a context — exposed for
 // tests + callers that have a richer context (deadline / tracing) to
 // pass through. Most production callers should use InvestigateAsync.
+// Delegates to EnqueueWith with empty opts (Config.DefaultLocale wins).
 func (uc *Usecase) Enqueue(ctx context.Context, incident *alertmodel.Incident) {
+	uc.EnqueueWith(ctx, incident, EnqueueOpts{})
+}
+
+// EnqueueWith is Enqueue with per-call overrides. Today only Locale flows
+// through to the worker + extractor prompts. Empty opts ↔ Enqueue exactly.
+func (uc *Usecase) EnqueueWith(ctx context.Context, incident *alertmodel.Incident, opts EnqueueOpts) {
 	if uc == nil || !uc.cfg.Enabled {
 		return
 	}
@@ -379,7 +415,11 @@ func (uc *Usecase) Enqueue(ctx context.Context, incident *alertmodel.Incident) {
 	// is minutes-scale. Spawn the goroutine and return immediately.
 	// run() defers releaseSem so the slot frees on any termination
 	// path (success / error / panic / timeout).
-	go uc.run(rep.ID, *incident, key)
+	locale := opts.Locale
+	if locale == "" {
+		locale = uc.cfg.DefaultLocale
+	}
+	go uc.run(rep.ID, *incident, key, locale)
 }
 
 // ForceEnqueue is the manual-trigger path called from POST
@@ -397,6 +437,13 @@ func (uc *Usecase) Enqueue(ctx context.Context, incident *alertmodel.Incident) {
 // Severity floor (gate 1) still applies — there's no use spawning an
 // info-level RCA even on explicit request.
 func (uc *Usecase) ForceEnqueue(ctx context.Context, incident *alertmodel.Incident) error {
+	return uc.ForceEnqueueWith(ctx, incident, EnqueueOpts{})
+}
+
+// ForceEnqueueWith is ForceEnqueue with per-call overrides. HTTP handler
+// uses this to thread Accept-Language → opts.Locale so the operator's
+// current UI locale governs the regenerated report.
+func (uc *Usecase) ForceEnqueueWith(ctx context.Context, incident *alertmodel.Incident, opts EnqueueOpts) error {
 	if uc == nil {
 		return fmt.Errorf("investigator: not initialised")
 	}
@@ -440,14 +487,65 @@ func (uc *Usecase) ForceEnqueue(ctx context.Context, incident *alertmodel.Incide
 
 	// Now enqueue normally (dedup check will pass since we just deleted
 	// the row; inflight will pass since we just cleared it).
-	uc.Enqueue(ctx, incident)
+	uc.EnqueueWith(ctx, incident, opts)
 	return nil
+}
+
+// BackfillUnstartedIncidents finds incidents that fired in [since, now)
+// without any investigation_reports row and enqueues an investigation for
+// each through the normal Enqueue path (severity, in-process inflight, and
+// concurrency-cap gates all still apply). Returns the number of incidents
+// it dispatched (not necessarily the number that will produce a report —
+// gates may still skip).
+//
+// Why this exists: SetInvestigator is wired only at manager startup, and
+// the structured RCA chain is only built when buildAIOpsRuntime succeeds,
+// which requires at least one LLM provider configured. Fresh installs
+// (and any time the manager boots before the operator has set a provider
+// key) thus have a window where incidents fire with no investigator wired
+// — RecordFiring silently skips, no row is written, and the IncidentDetail
+// page shows status=not_started indefinitely. Once the operator adds a
+// provider and the manager restarts, this pass repairs the window.
+//
+// Bounded by `limit` to cap the LLM cost of a burst (the global concurrency
+// cap in Enqueue further damps the burst — over-cap calls land as skipped
+// rows rather than queueing).
+func (uc *Usecase) BackfillUnstartedIncidents(ctx context.Context, since time.Time, limit int, loadIncident IncidentLoader) (int, error) {
+	if uc == nil || !uc.cfg.Enabled || loadIncident == nil {
+		return 0, nil
+	}
+	ids, err := uc.repo.ListIncidentsWithoutReport(ctx, since, limit)
+	if err != nil {
+		return 0, fmt.Errorf("list unstarted: %w", err)
+	}
+	dispatched := 0
+	for _, id := range ids {
+		inc, lerr := loadIncident(ctx, id)
+		if lerr != nil || inc == nil {
+			uc.log.Info("backfill: skip incident (load failed)",
+				slog.Uint64("incident_id", id), slog.Any("err", lerr))
+			continue
+		}
+		// Skip resolved incidents — investigating a closed alert produces
+		// stale findings and burns LLM cost for no operator benefit.
+		if inc.Status == alertmodel.IncidentStatusResolved {
+			continue
+		}
+		uc.Enqueue(ctx, inc)
+		dispatched++
+	}
+	if dispatched > 0 {
+		uc.log.Info("backfill: enqueued unstarted incidents",
+			slog.Int("count", dispatched), slog.Int("scanned", len(ids)),
+			slog.Time("since", since))
+	}
+	return dispatched, nil
 }
 
 // run is the per-investigation goroutine. context.Background is
 // intentional: the originating alert ctx may be canceled long before
 // the LLM finishes; we own our own WorkerTimeout cap instead.
-func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVal string) {
+func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVal string, locale string) {
 	defer func() {
 		uc.inflightMu.Lock()
 		delete(uc.inflight, dedupKeyVal)
@@ -469,7 +567,7 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 	defer cancel()
 
 	start := time.Now()
-	prompt := renderAlertPrompt(&incident)
+	prompt := renderAlertPrompt(&incident, locale)
 	worker, err := uc.spawner.SpawnWorker(ctx, chatruntime.SpawnRequest{
 		AgentName:   uc.cfg.AgentName,
 		Prompt:      prompt,
@@ -548,7 +646,7 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 	// by session_id) so the report + UI show how many tools the
 	// investigation actually invoked instead of a hardcoded 0.
 	toolCalls := uc.countToolCalls(worker.SessionID)
-	fields := uc.extractStructured(context.Background(), incident, finalAnswer, toolCalls)
+	fields := uc.extractStructured(context.Background(), incident, finalAnswer, toolCalls, locale)
 
 	if err := uc.repo.MarkReady(context.Background(), reportID, fields); err != nil {
 		uc.log.Warn("mark ready failed",
@@ -567,8 +665,10 @@ func (uc *Usecase) run(reportID string, incident alertmodel.Incident, dedupKeyVa
 // investigator worker. Includes the alert metadata the worker needs
 // to know where to start without making it dig through unrelated
 // state. The persona body provides the methodology; this prompt is
-// just the "what fired" payload.
-func renderAlertPrompt(in *alertmodel.Incident) string {
+// just the "what fired" payload. locale overrides the persona's
+// implicit language (the persona is currently Chinese) — see
+// [[feedback_ai_output_locale]]: AI 输出语言跟随用户 UI locale.
+func renderAlertPrompt(in *alertmodel.Incident, locale string) string {
 	var b strings.Builder
 	b.WriteString("An alert fired. Investigate the root cause and report back.\n\n")
 	b.WriteString("Incident metadata:\n")
@@ -601,7 +701,32 @@ func renderAlertPrompt(in *alertmodel.Incident) string {
 	b.WriteString("\nBUDGET: hard cap 10 tool calls. By tool call #7 you MUST start writing the final report; by #10 you MUST emit it even if some signals are unclear. ")
 	b.WriteString("If a tool returns empty (result:[] or streams:[]) twice in the same direction, STOP that line — empty is a finding, write it into the report and move on. ")
 	b.WriteString("Never call the same tool more than 3 times.\n")
+	// Language directive last — last-in-prompt instructions are stickier in
+	// practice, and the persona file (Chinese) tries to set the language
+	// implicitly. Overriding here keeps the persona swappable.
+	if d := localeDirective(locale); d != "" {
+		b.WriteString("\n")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
 	return b.String()
+}
+
+// localeDirective renders an explicit "write the report in <lang>" line
+// from a locale tag. Empty / unknown locales fall through to "" so the
+// persona's implicit language wins (currently Chinese — see
+// agents/incident-investigator.md). Accepts "en" / "en-US" / "zh" /
+// "zh-CN" etc.; only the primary subtag matters.
+func localeDirective(locale string) string {
+	primary := strings.ToLower(strings.SplitN(strings.TrimSpace(locale), "-", 2)[0])
+	switch primary {
+	case "en":
+		return "LANGUAGE: Write the entire final report in English. Every field — root cause, causal chain, evidence summaries, suggested actions — must be English. The persona description happens to be Chinese; ignore that and respond in English."
+	case "zh":
+		return "LANGUAGE: 全程用简体中文撰写最终报告（根因 / 因果链 / 证据 / 建议动作 各字段都用中文）。"
+	default:
+		return ""
+	}
 }
 
 // severityAtLeast does a coarse ordering check on alert severities.

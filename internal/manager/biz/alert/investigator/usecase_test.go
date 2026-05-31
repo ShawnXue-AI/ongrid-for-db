@@ -74,6 +74,10 @@ func (r *fakeRepo) GetByIncident(_ context.Context, _ uint64) (*alertmodel.Inves
 
 func (r *fakeRepo) DeleteByIncident(_ context.Context, _ uint64) error { return nil }
 
+func (r *fakeRepo) ListIncidentsWithoutReport(_ context.Context, _ time.Time, _ int) ([]uint64, error) {
+	return nil, nil
+}
+
 type fakeSpawner struct {
 	mu      sync.Mutex
 	calls   []chatruntime.SpawnRequest

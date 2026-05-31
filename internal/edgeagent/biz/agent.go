@@ -87,6 +87,21 @@ type Agent struct {
 	// systemd run ExecStartPre and swap the binary on restart. Buffered
 	// to size 1 so the handler never blocks on a closed-channel race.
 	upgradeRequested chan struct{}
+
+	// pluginHealthFn, when set, returns the current per-plugin health to
+	// piggyback on each heartbeat. Wired post-construction (SetPluginHealthFn)
+	// because the plugin supervisor is built after the Agent in main; guarded
+	// by mu so the heartbeat goroutine reads it race-free.
+	pluginHealthFn func() []tunnel.PluginHealthWire
+}
+
+// SetPluginHealthFn wires the plugin-health provider used by the heartbeat
+// loop. Safe to call after Run has started — the heartbeat goroutine reads
+// the field under mu. nil fn disables plugin reporting (heartbeat omits it).
+func (a *Agent) SetPluginHealthFn(fn func() []tunnel.PluginHealthWire) {
+	a.mu.Lock()
+	a.pluginHealthFn = fn
+	a.mu.Unlock()
 }
 
 // NewAgent builds an Agent; applies defaults for zero-valued Config
@@ -366,11 +381,19 @@ func (a *Agent) heartbeatLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
+			a.mu.RLock()
+			healthFn := a.pluginHealthFn
+			a.mu.RUnlock()
+			var plugins []tunnel.PluginHealthWire
+			if healthFn != nil {
+				plugins = healthFn()
+			}
 			rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := a.client.Call(rctx, tunnel.MethodHeartbeat,
 				tunnel.HeartbeatRequest{
-					EdgeID: a.EdgeID(),
-					Ts:     time.Now().Unix(),
+					EdgeID:  a.EdgeID(),
+					Ts:      time.Now().Unix(),
+					Plugins: plugins,
 				}, nil)
 			cancel()
 			if err != nil {

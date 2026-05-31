@@ -113,6 +113,38 @@ func (r *InvestigationRepo) FailOrphaned(ctx context.Context, reason string) (in
 	return res.RowsAffected, nil
 }
 
+// ListIncidentsWithoutReport returns IDs of incidents that fired in [since,
+// now) but have no investigation_reports row at all. Backs the boot
+// compensation pass: if the manager started without an LLM provider
+// configured, alertUC.SetInvestigator was never called and incidents that
+// fired in that window had their auto-investigation silently skipped (no
+// row written → API returns status=not_started forever). Once a provider
+// gets configured + the manager restarts, this list lets the backfill
+// re-enqueue them through the normal Enqueue gates (severity, concurrency
+// cap, dedup).
+//
+// Ordered by fired_at DESC so freshest incidents get analyzed first when
+// the limit clips. Limit bounds the LLM cost of a backfill burst.
+func (r *InvestigationRepo) ListIncidentsWithoutReport(ctx context.Context, since time.Time, limit int) ([]uint64, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var ids []uint64
+	q := r.db.WithContext(ctx).
+		Table("alert_incidents AS i").
+		Joins("LEFT JOIN investigation_reports AS r ON r.incident_id = i.id AND r.deleted_at IS NULL").
+		Where("r.id IS NULL").
+		Where("i.first_fired_at >= ?", since).
+		Where("i.deleted_at IS NULL").
+		Order("i.first_fired_at DESC").
+		Limit(limit).
+		Pluck("i.id", &ids)
+	if q.Error != nil {
+		return nil, q.Error
+	}
+	return ids, nil
+}
+
 // AttachWorker records the spawned worker + audit session so the
 // SPA can deep-link into the underlying transcript while the worker
 // is still running.
