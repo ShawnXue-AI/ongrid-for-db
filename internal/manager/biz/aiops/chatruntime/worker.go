@@ -150,6 +150,12 @@ type SpawnRequest struct {
 	// don't belong to any operator and the /chat filter (which checks
 	// user_id) won't surface them.
 	OwnerUserID uint64
+	// Locale is the UI language ("en", "zh-CN", ...) the worker's reply
+	// should use. Threaded from the parent coordinator's request so a
+	// sub-agent answers in the same language the user is typing in
+	// (otherwise GLM defaults to zh on English questions). Empty = no
+	// directive, back-compat with investigator/auto-spawned workers.
+	Locale string
 }
 
 // TaskNotification is the payload of a task_notification streaming
@@ -199,6 +205,10 @@ func EmitFromContext(ctx context.Context) Emit {
 	v, _ := ctx.Value(emitCtxKey).(Emit)
 	return v
 }
+
+// Locale ctx propagation lives in the tools package (next to AgentTool,
+// the consumer). Runtime calls tools.WithLocale before g.Invoke; the
+// tool reads it via tools.LocaleFromContext inside InvokableRun.
 
 // SpawnWorker starts a worker. See package header for state machine.
 //
@@ -330,7 +340,7 @@ func (rt *Runtime) SpawnWorker(ctx context.Context, req SpawnRequest) (*Worker, 
 		w.StartedAt = time.Now().UTC()
 		w.mu.Unlock()
 
-		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt)
+		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt, req.Locale)
 
 		w.mu.Lock()
 		end := time.Now().UTC()
@@ -434,7 +444,9 @@ func (rt *Runtime) SendToWorker(ctx context.Context, workerID, message string) e
 	sessID := w.SessionID
 	w.mu.Unlock()
 
-	result, err := rt.runWorker(ctx, agentDef, sessID, message)
+	// SendToWorker has no SpawnRequest; inherit locale from ctx
+	// (chat coordinator threads it via basetool.WithLocale).
+	result, err := rt.runWorker(ctx, agentDef, sessID, message, basetool.LocaleFromContext(ctx))
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -507,7 +519,7 @@ func (rt *Runtime) GetWorker(workerID string) (*Worker, bool) {
 // coordinator's). The user-role prompt is persisted up-front here,
 // matching Handle()'s "user message lands on disk before the LLM call"
 // invariant — same survival semantics on a graph crash.
-func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText string) (string, error) {
+func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string) (string, error) {
 	workerTools := filterToolsForAgent(rt.cfg.ToolBag, agentDef, false)
 
 	systemPrompt := ComposeSystemPrompt(rt.cfg.BasePrompt, nil, agentDef)
@@ -583,6 +595,7 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 		SystemPrompt: systemPrompt,
 		History:      nil,
 		UserText:     userText,
+		Locale:       locale,
 	}, compose.WithCallbacks(handlers...))
 	if err != nil {
 		return "", err

@@ -605,6 +605,12 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	if mopts := chatModelOpts(req); len(mopts) > 0 {
 		invokeOpts = append(invokeOpts, compose.WithChatModelOption(mopts...))
 	}
+	// Thread the UI locale onto ctx so AgentTool can pick it up and
+	// forward it into the sub-agent's SpawnRequest. Without this, a
+	// coordinator that handles an English question hands off to a
+	// specialist that answers in zh (GLM default) — see
+	// feedback_ai_output_locale.md regression 2026-06-02.
+	ctx = basetool.WithLocale(ctx, req.Locale)
 	out, invokeErr := g.Invoke(ctx, &graph.Input{
 		SystemPrompt:     systemPrompt,
 		History:          einoHistory,

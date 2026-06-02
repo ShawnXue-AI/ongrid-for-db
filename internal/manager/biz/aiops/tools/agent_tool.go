@@ -54,6 +54,11 @@ type SpawnWorkerRequest struct {
 	Prompt        string
 	Background    bool
 	ParentSession string
+	// Locale carries the coordinator's UI locale ("en", "zh-CN", ...)
+	// down to the sub-agent so it answers in the same language. Empty
+	// = no directive (back-compat for callers that don't have a UI
+	// locale, e.g. investigator auto-spawn).
+	Locale string
 }
 
 // WorkerHandle is the seam-side projection of chatruntime.Worker. Only
@@ -263,6 +268,7 @@ func (t *AgentTool) InvokableRun(ctx context.Context, argsJSON string, opts ...b
 	w, err := t.spawner.SpawnWorker(ctx, SpawnWorkerRequest{
 		AgentName: args.SubagentType,
 		Prompt:    args.Prompt,
+		Locale:    basetool.LocaleFromContext(ctx),
 	})
 	if err != nil {
 		return "", fmt.Errorf("AgentTool: spawn: %w", err)
