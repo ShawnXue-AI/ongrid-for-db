@@ -130,25 +130,33 @@ export default function ReportsPage() {
 
       <div className="flex flex-1 flex-col overflow-y-auto px-6 py-5">
         <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
-          <table className="w-full text-sm">
+          <table className="w-full table-fixed text-sm">
+            <colgroup>
+              <col />
+              <col className="w-28" />
+              <col className="w-44" />
+              <col className="w-24" />
+              <col className="w-28" />
+            </colgroup>
             <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
               <tr>
                 <th className="px-5 py-3 text-left">{tr('报告', 'Report')}</th>
+                <th className="px-4 py-3 text-left">{tr('类型', 'Kind')}</th>
+                <th className="px-4 py-3 text-left">{tr('周期', 'Period')}</th>
                 <th className="px-4 py-3 text-left">{tr('状态', 'Status')}</th>
-                <th className="hidden px-4 py-3 text-left md:table-cell">{tr('摘要', 'Summary')}</th>
                 <th className="px-5 py-3 text-right">{tr('生成时间', 'Generated')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/40">
               {loading && items.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-10 text-center text-zinc-500">
+                  <td colSpan={5} className="px-4 py-10 text-center text-zinc-500">
                     {tr('加载中…', 'Loading…')}
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-10 text-center text-zinc-500">
+                  <td colSpan={5} className="px-4 py-10 text-center text-zinc-500">
                     {page > 0
                       ? tr('这一页没有报告', 'No reports on this page')
                       : tr('暂无报告。点右上角「立即生成」，或设一个定时任务。', 'No reports yet. Click "Generate now" or set up a schedule.')}
@@ -161,20 +169,29 @@ export default function ReportsPage() {
                     className="cursor-pointer transition-colors hover:bg-zinc-900/40"
                     onClick={() => navigate(`/reports/${r.id}`)}
                   >
-                    {/* NAME cell — two lines: period (bold) + kind (grey),
-                        mirroring the skills table's name + slug. */}
-                    <td className="whitespace-nowrap px-5 py-3">
-                      <div className="font-semibold text-zinc-100">{periodLabel(r.title)}</div>
-                      <div className="mt-0.5 text-xs text-zinc-500">
-                        {tr(KIND_ZH[r.kind] ?? r.kind, KIND_EN[r.kind] ?? r.kind)}
-                      </div>
+                    {/* REPORT cell — the summary/headline is the personalized
+                        name (descriptive, distinct per report); falls back to
+                        a generating/period label before content lands. The
+                        date is demoted to its own Period column so it no
+                        longer drowns out the summary. */}
+                    <td className="truncate px-5 py-3 font-medium text-zinc-100">
+                      {r.summary
+                        ? r.summary
+                        : r.status === 'failed'
+                          ? <span className="text-zinc-500">{tr('生成失败', 'Generation failed')}</span>
+                          : <span className="text-zinc-500">{tr('生成中…', 'Generating…')}</span>}
                     </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span className="inline-flex items-center rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-0.5 text-xs text-zinc-300">
+                        {tr(KIND_ZH[r.kind] ?? r.kind, KIND_EN[r.kind] ?? r.kind)}
+                      </span>
+                    </td>
+                    <td className="truncate px-4 py-3 text-xs text-zinc-500">{periodLabel(r.title)}</td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', STATUS_STYLE[r.status])}>
                         {tr(STATUS_ZH[r.status], STATUS_EN[r.status])}
                       </span>
                     </td>
-                    <td className="hidden max-w-md truncate px-4 py-3 text-zinc-400 md:table-cell">{r.summary}</td>
                     <td className="whitespace-nowrap px-5 py-3 text-right text-xs text-zinc-500">
                       {r.generated_at ? relativeTime(r.generated_at) : relativeTime(r.created_at)}
                     </td>
