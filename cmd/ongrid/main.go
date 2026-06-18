@@ -798,12 +798,6 @@ func main() {
 	dbTopo := managerbizdatabase.NewTopologySyncer(topologyUC, log)
 	databaseHandler.SetTopologySyncer(dbTopo)
 
-	// Wire DB query executor so the handler can dispatch read-only SQL
-	// to edge agents (slow queries, schema inspection, etc.).
-	databaseHandler.SetDBQueryExecutor(
-		managerserverdatabase.NewEdgeDBQueryExecutor(fbClient),
-	)
-
 	// Data plane auth verify — nginx auth_request
 	// calls this endpoint to validate edge basic-auth before proxy_pass'ing
 	// /loki/api/v1/push to internal Loki. Reuses the same edge credentials
@@ -1014,6 +1008,12 @@ func main() {
 	// exists. Until this point UpgradeAgent surfaced a "not wired" error
 	// — by design, because we don't accept HTTP traffic until later.
 	edgeSvc.SetEdgeCaller(fbClient)
+
+	// Wire DB query executor so the handler can dispatch read-only SQL
+	// to edge agents (slow queries, schema inspection, etc.).
+	databaseHandler.SetDBQueryExecutor(
+		managerserverdatabase.NewEdgeDBQueryExecutor(fbClient),
+	)
 
 	// promIngester for the Wiring is typed as the interface; passing a
 	// typed-nil *Ingester would be a non-nil interface, so explicitly hand
