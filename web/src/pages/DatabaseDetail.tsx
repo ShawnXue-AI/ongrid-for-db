@@ -133,7 +133,7 @@ export default function DatabaseDetailPage() {
   useEffect(() => { void refreshMetrics(); }, [refreshMetrics]);
 
   // Auto-refresh every 30s
-  usePoll(refreshMetrics, 30000, [inst?.id]);
+  usePoll(refreshMetrics, 30000, !!inst?.id);
 
   if (loading) {
     return (

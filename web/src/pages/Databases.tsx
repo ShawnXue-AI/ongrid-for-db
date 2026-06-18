@@ -229,7 +229,7 @@ export default function DatabasesPage() {
 
       {/* Create Modal */}
       {createOpen && (
-        <Modal onClose={() => setCreateOpen(false)}>
+        <Modal open={createOpen} onClose={() => setCreateOpen(false)}>
           <div className="w-full max-w-md space-y-4 p-6">
             <h2 className="text-lg font-semibold text-zinc-100">
               {tr('添加数据库实例', 'Add Database Instance')}
@@ -284,7 +284,7 @@ export default function DatabasesPage() {
 
       {/* Delete confirm */}
       {deleteTarget && (
-        <Modal onClose={() => setDeleteTarget(null)}>
+        <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
           <div className="w-full max-w-sm space-y-4 p-6">
             <h2 className="text-lg font-semibold text-zinc-100">
               {tr('确认删除', 'Confirm Delete')}
