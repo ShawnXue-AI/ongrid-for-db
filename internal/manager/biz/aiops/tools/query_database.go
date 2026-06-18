@@ -1,4 +1,4 @@
-﻿package tools
+package tools
 
 import (
 	"context"
@@ -47,6 +47,7 @@ var QueryDatabaseSchema = json.RawMessage(`{
       "type": "integer",
       "description": "Database port"
     },
+
     "database": {
       "type": "string",
       "description": "Database/schema name (optional)"
@@ -66,7 +67,7 @@ var QueryDatabaseSchema = json.RawMessage(`{
       "default": 100
     }
   },
-  "required": ["query"]
+  "required": ["edge_id", "db_type", "host", "port", "query"]
 }`)
 
 // executeQueryDatabase dispatches a read-only SQL query to an edge agent
@@ -78,7 +79,7 @@ func (r *Registry) executeQueryDatabase(ctx context.Context, args json.RawMessag
 
 	var in struct {
 		DatabaseID  uint64 `json:"database_id,omitempty"`
-		EdgeID      uint64 `json:"edge_id,omitempty"`
+		EdgeID      uint64 `json:"edge_id"`
 		DBType      string `json:"db_type"`
 		Host        string `json:"host"`
 		Port        int    `json:"port"`
@@ -98,18 +99,68 @@ func (r *Registry) executeQueryDatabase(ctx context.Context, args json.RawMessag
 
 	// Resolve credentials server-side if not provided by the caller.
 	// This keeps database passwords out of the LLM prompt context.
-	if (in.User == `` || in.Password == ``) && in.DatabaseID > 0 && r.credentialResolver != nil {
+	if (in.User == "" || in.Password == "") && in.DatabaseID > 0 && r.credentialResolver != nil {
 		user, pass, found, err := r.credentialResolver.LookupCredentials(ctx, in.DatabaseID)
 		if err != nil {
-			return ExecuteResult{}, fmt.Errorf(`%s: resolve credentials: %w`, ToolNameQueryDatabase, err)
+			return ExecuteResult{}, fmt.Errorf("%s: resolve credentials: %w", ToolNameQueryDatabase, err)
 		}
 		if found {
-			if in.User == `` { in.User = user }
-			if in.Password == `` { in.Password = pass }
+			if in.User == "" {
+				in.User = user
+			}
+			if in.Password == "" {
+				in.Password = pass
+			}
 		}
 	}
-	if in.User == `` || in.Password == `` {
-		return ExecuteResult{}, fmt.Errorf(`%s: user and password are required (provide database_id for server-side resolution, or pass credentials directly)`, ToolNameQueryDatabase)
+	if in.User == "" || in.Password == "" {
+		return ExecuteResult{}, fmt.Errorf("%s: user and password are required (provide database_id for server-side resolution, or pass credentials directly)", ToolNameQueryDatabase)
 	}
 
 	// Build the skill params.
+	skillParams := map[string]any{
+		"db_type":      in.DBType,
+		"host":         in.Host,
+		"port":         in.Port,
+		"user":         in.User,
+		"password":     in.Password,
+		"database":     in.Database,
+		"query":        in.Query,
+		"timeout_secs": in.TimeoutSecs,
+		"max_rows":     in.MaxRows,
+	}
+	if in.TimeoutSecs <= 0 {
+		skillParams["timeout_secs"] = 30
+	}
+	if in.MaxRows <= 0 {
+		skillParams["max_rows"] = 100
+	}
+
+	body, err := json.Marshal(tunnel.ExecuteSkillRequest{
+		Key:    "db_exec_query",
+		Params: mustRaw(skillParams),
+	})
+	if err != nil {
+		return ExecuteResult{}, fmt.Errorf("%s: marshal request: %w", ToolNameQueryDatabase, err)
+	}
+
+	respBody, err := r.caller.Call(ctx, in.EdgeID, tunnel.MethodExecuteSkill, body)
+	if err != nil {
+		return ExecuteResult{}, fmt.Errorf("%s: dispatch: %w", ToolNameQueryDatabase, err)
+	}
+
+	var resp tunnel.ExecuteSkillResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return ExecuteResult{}, fmt.Errorf("%s: decode response: %w", ToolNameQueryDatabase, err)
+	}
+	if resp.Error != "" {
+		return ExecuteResult{}, fmt.Errorf("%s: %s", ToolNameQueryDatabase, resp.Error)
+	}
+
+	return ExecuteResult{ResultJSON: resp.Result}, nil
+}
+
+func mustRaw(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
+}
