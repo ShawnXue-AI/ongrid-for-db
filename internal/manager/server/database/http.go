@@ -1,4 +1,4 @@
-﻿// Package database builds the HTTP routes for database instance management.
+// Package database builds the HTTP routes for database instance management.
 //
 // The Handler assumes the caller-wide auth middleware (internal/pkg/auth)
 // has already populated the request context with the authenticated user.
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -45,11 +46,19 @@ type DBQueryExecutor interface {
 	ExecuteOnEdge(ctx context.Context, edgeID uint64, dbType, host string, port int, user, password, database, query string, timeoutSecs, maxRows int) (json.RawMessage, error)
 }
 
+// CredentialStore stores and resolves database instance credentials.
+// Implementations should encrypt passwords at rest.
+type CredentialStore interface {
+	Set(ctx context.Context, instanceID uint64, user, password string) error
+	Delete(ctx context.Context, instanceID uint64) error
+}
+
 // Handler wires database instance HTTP routes to the service layer.
 type Handler struct {
 	svc     Service
 	topo    TopologySyncer
 	dbQuery DBQueryExecutor
+	credDB  CredentialStore
 }
 
 // NewHandler constructs the handler.
@@ -62,6 +71,11 @@ func (h *Handler) SetTopologySyncer(s TopologySyncer) { h.topo = s }
 
 // SetDBQueryExecutor wires the optional DB query executor for the
 func (h *Handler) SetDBQueryExecutor(q DBQueryExecutor) { h.dbQuery = q }
+
+// SetCredentialStore wires the optional encrypted credential store for
+// database instance user/password. When set, credentials are stored server-side
+// rather than passed through the LLM prompt context.
+func (h *Handler) SetCredentialStore(s CredentialStore) { h.credDB = s }
 
 // Register attaches routes to the given chi router (typically the protected
 // /api group in cmd/ongrid/main.go).
@@ -83,6 +97,8 @@ type createRequest struct {
 	DBType      string `json:"db_type"`
 	Host        string `json:"host"`
 	Port        int    `json:"port"`
+	DBUser      string `json:"db_user,omitempty"`
+	DBPassword  string `json:"db_password,omitempty"`
 	Description string `json:"description,omitempty"`
 	Labels      string `json:"labels,omitempty"`
 }
@@ -91,6 +107,8 @@ type updateRequest struct {
 	Name        string `json:"name"`
 	Host        string `json:"host"`
 	Port        int    `json:"port"`
+	DBUser      string `json:"db_user,omitempty"`
+	DBPassword  string `json:"db_password,omitempty"`
 	Description string `json:"description,omitempty"`
 	Labels      string `json:"labels,omitempty"`
 	ConfigJSON  string `json:"config_json,omitempty"`
@@ -142,6 +160,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
+	if !isValidDBType(req.DBType) {
+		writeErr(w, fmt.Errorf("unsupported db_type %q", req.DBType))
+		return
+	}
 	inst := &model.DatabaseInstance{
 		EdgeID:      req.EdgeID,
 		Name:        req.Name,
@@ -158,6 +180,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.topo != nil {
 		_ = h.topo.SyncDBInstance(r.Context(), inst)
+	}
+	// Store credentials server-side (encrypted at rest) if provided.
+	if h.credDB != nil {
+		_ = h.credDB.Set(r.Context(), inst.ID, req.DBUser, req.DBPassword)
 	}
 	writeJSON(w, http.StatusCreated, toResponse(inst))
 }
@@ -222,11 +248,23 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
+	if req.Name == "" || req.Host == "" {
+		writeErr(w, errs.ErrInvalid)
+		return
+	}
+	// Fetch existing to preserve Version/Status (probe-managed, not user-modifiable).
+	existing, err := h.svc.GetByID(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	inst := &model.DatabaseInstance{
 		ID:          id,
 		Name:        req.Name,
 		Host:        req.Host,
 		Port:        req.Port,
+		Version:     existing.Version,
+		Status:      existing.Status,
 		Description: req.Description,
 		Labels:      req.Labels,
 		ConfigJSON:  req.ConfigJSON,
@@ -234,6 +272,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Update(r.Context(), inst); err != nil {
 		writeErr(w, err)
 		return
+	}
+	// Store credentials server-side if provided on update.
+	if h.credDB != nil && req.DBUser != "" && req.DBPassword != "" {
+		_ = h.credDB.Set(r.Context(), id, req.DBUser, req.DBPassword)
 	}
 	// re-fetch to return full state
 	updated, err := h.svc.GetByID(r.Context(), id)
@@ -250,9 +292,24 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Fetch instance before deletion so we can clean up topology.
+	inst, err := h.svc.GetByID(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if h.topo != nil {
+		if err := h.topo.RemoveDBInstance(r.Context(), inst); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if h.credDB != nil {
+		_ = h.credDB.Delete(r.Context(), id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -439,10 +496,10 @@ func buildSlowQuerySQL(dbType string, minDurationMs, limit int) (query, defaultD
 		return `SELECT
 			DIGEST_TEXT AS sql_text,
 			COUNT_STAR AS exec_count,
-			ROUND(SUM_TIMER_WAIT / 1000000000000, 2) AS total_latency_ms,
-			ROUND(AVG_TIMER_WAIT / 1000000000000, 2) AS avg_latency_ms,
-			ROUND(MAX_TIMER_WAIT / 1000000000000, 2) AS max_latency_ms,
-			ROUND(MIN_TIMER_WAIT / 1000000000000, 2) AS min_latency_ms,
+			ROUND(SUM_TIMER_WAIT / 1000000000, 2) AS total_latency_ms,
+			ROUND(AVG_TIMER_WAIT / 1000000000, 2) AS avg_latency_ms,
+			ROUND(MAX_TIMER_WAIT / 1000000000, 2) AS max_latency_ms,
+			ROUND(MIN_TIMER_WAIT / 1000000000, 2) AS min_latency_ms,
 			SUM_ROWS_EXAMINED AS total_rows_examined,
 			SUM_ROWS_SENT AS total_rows_sent,
 			SUM_ROWS_AFFECTED AS total_rows_affected,
@@ -453,7 +510,7 @@ func buildSlowQuerySQL(dbType string, minDurationMs, limit int) (query, defaultD
 			LAST_SEEN AS last_seen
 		FROM performance_schema.events_statements_summary_by_digest
 		WHERE DIGEST_TEXT IS NOT NULL
-			AND SUM_TIMER_WAIT > ` + strconv.Itoa(minDurationMs*1000000) + `
+			AND SUM_TIMER_WAIT > ` + strconv.Itoa(minDurationMs*1000000000) + `
 		ORDER BY SUM_TIMER_WAIT DESC
 		LIMIT ` + strconv.Itoa(limit), "", true
 
@@ -635,6 +692,16 @@ func float64OrZero(v any) float64 {
 	return 0
 }
 
+// isValidDBType checks whether dbType is one of the supported database types.
+func isValidDBType(dbType string) bool {
+	for _, t := range model.AllDBTypes() {
+		if t == dbType {
+			return true
+		}
+	}
+	return false
+}
+
 func boolOrZero(v any) bool {
 	if v == nil {
 		return false
@@ -697,6 +764,11 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use a background context for DB writes so the probe result is
+	// persisted even if the HTTP client disconnects mid-request.
+	writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	// Run SELECT VERSION() through the edge agent.
 	rawResult, err := h.dbQuery.ExecuteOnEdge(r.Context(),
 		inst.EdgeID, inst.DBType, inst.Host, inst.Port,
@@ -704,7 +776,7 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		// Mark offline on connection failure.
-		_ = h.svc.UpdateStatus(r.Context(), id, model.StatusOffline)
+		_ = h.svc.UpdateStatus(writeCtx, id, model.StatusOffline)
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  err.Error(),
@@ -715,15 +787,12 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 	// Parse version from the result.
 	version := parseVersionFromResult(rawResult)
 
-	// Update status and version.
+	// Update instance status and version atomically.
 	if version != "" {
-		_ = h.svc.UpdateVersion(r.Context(), id, version)
+		inst.Version = version
 	}
-	_ = h.svc.UpdateStatus(r.Context(), id, model.StatusOnline)
-
-	// Re-fetch to return full updated state.
-	updated, err := h.svc.GetByID(r.Context(), id)
-	if err != nil {
+	inst.Status = model.StatusOnline
+	if err := h.svc.Update(writeCtx, inst); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -731,7 +800,7 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, probeResponse{
 		Status:      model.StatusOnline,
 		Version:     version,
-		UpdatedInst: toResponse(updated),
+		UpdatedInst: toResponse(inst),
 	})
 }
 
@@ -753,10 +822,13 @@ func parseVersionFromResult(raw json.RawMessage) string {
 		return ""
 	}
 	row := wrapper.Rows[0]
-	for _, v := range row {
-		s := fmt.Sprintf("%v", v)
-		if s != "" && s != "<nil>" {
-			return extractVersion(s)
+	// Look up each known version column name explicitly (avoid map iteration order).
+	for _, key := range []string{"VERSION()", "version", "@@version", "version()"} {
+		if v, ok := row[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if s != "" && s != "<nil>" {
+				return extractVersion(s)
+			}
 		}
 	}
 	return ""

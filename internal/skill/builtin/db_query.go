@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func (DBQuery) Metadata() skill.Metadata {
 		Params: skill.ParamSchema{
 			{Name: "db_type", Param: skill.Param{
 				Type: "string", Required: true,
-				Desc: "数据库类型：mysql / postgresql / selectdb",
+				Desc: "数据库类型：mysql / postgresql / selectdb / oracle",
 			}},
 			{Name: "host", Param: skill.Param{
 				Type: "string", Required: true,
@@ -101,12 +102,9 @@ func (DBQuery) Execute(ctx context.Context, params json.RawMessage) (json.RawMes
 	}
 
 	// Validate read-only query.
-	queryType := classifyQuery(p.Query)
-	switch queryType {
-	case "select", "show", "explain", "describe", "with":
-		// allowed
-	default:
-		return nil, fmt.Errorf("db_exec_query: rejected %s statement (only SELECT/SHOW/EXPLAIN/DESCRIBE/WITH allowed)", queryType)
+	if !isAllowedQuery(p.Query) {
+		queryType := classifyQuery(p.Query)
+		return nil, fmt.Errorf("db_exec_query: rejected %s statement (only SELECT/SHOW/EXPLAIN/DESCRIBE/WITH allowed; SELECT with INTO OUTFILE/DUMPFILE or LOAD_FILE is also rejected)", queryType)
 	}
 
 	timeout := time.Duration(p.TimeoutSecs) * time.Second
@@ -192,17 +190,58 @@ func classifyQuery(q string) string {
 	return strings.ToLower(strings.TrimSpace(q))
 }
 
+// isAllowedQuery checks whether the full SQL query is permitted under the
+// read-only policy. It extracts the first keyword and also checks for
+// dangerous SELECT variants that have write-like side effects
+// (e.g. SELECT … INTO OUTFILE, LOAD_FILE()).
+func isAllowedQuery(q string) bool {
+	raw := strings.TrimSpace(q)
+
+	// Extract the first keyword.
+	keyword := raw
+	if idx := strings.IndexAny(raw, " \t\n\r("); idx > 0 {
+		keyword = raw[:idx]
+	}
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+
+	switch keyword {
+	case "select", "show", "explain", "describe", "with":
+		// For SELECT, check for dangerous clauses with write-like side effects.
+		if keyword == "select" {
+			upper := strings.ToUpper(raw)
+			if strings.Contains(upper, "INTO OUTFILE") ||
+				strings.Contains(upper, "INTO DUMPFILE") ||
+				strings.Contains(upper, "LOAD_FILE(") {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // buildDSN constructs a database/sql DSN + driver name from params.
 func buildDSN(p dbQueryParams) (dsn, driverName string, err error) {
 	switch p.DBType {
 	case "mysql", "selectdb":
-		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", p.User, p.Password, p.Host, p.Port)
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", url.QueryEscape(p.User), url.QueryEscape(p.Password), p.Host, p.Port)
 		if p.Database != "" {
 			dsn += p.Database
 		}
 		dsn += "?timeout=10s&readTimeout=30s&parseTime=true&charset=utf8mb4"
 		return dsn, "mysql", nil
+	case "postgresql":
+		database := p.Database
+		if database == "" {
+			database = "postgres"
+		}
+		dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", url.QueryEscape(p.User), url.QueryEscape(p.Password), p.Host, p.Port, database)
+		return dsn, "pgx", nil
+	case "oracle":
+		dsn := fmt.Sprintf("%s/%s@%s:%d/%s", url.QueryEscape(p.User), url.QueryEscape(p.Password), p.Host, p.Port, p.Database)
+		return dsn, "oracle", nil
 	default:
-		return "", "", fmt.Errorf("unsupported db_type %q (supported: mysql, selectdb)", p.DBType)
+		return "", "", fmt.Errorf("unsupported db_type %q (supported: mysql, selectdb, postgresql, oracle)", p.DBType)
 	}
 }

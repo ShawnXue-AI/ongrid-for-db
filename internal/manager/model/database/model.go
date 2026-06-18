@@ -19,7 +19,7 @@ import (
 // subprocess for metrics collection.
 type DatabaseInstance struct {
 	ID      uint64 `gorm:"primaryKey;autoIncrement"`
-	EdgeID  uint64 `gorm:"not null;index;column:edge_id"`
+	EdgeID  uint64 `gorm:"not null;uniqueIndex:uk_edge_name,priority:2;column:edge_id"`
 	// Name is the operator-friendly display label. Unique per edge so
 	// operators can name their instances without collision.
 	Name    string `gorm:"size:128;not null;uniqueIndex:uk_edge_name,priority:1;column:name"`

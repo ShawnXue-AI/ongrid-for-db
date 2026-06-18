@@ -51,25 +51,29 @@ func NewPool(maxOpen int, idleTimeout time.Duration) *Pool {
 
 // Get returns a *sql.DB for the given DSN. If one exists in the pool
 // and is still healthy, it's returned; otherwise a new one is opened.
+// The mutex is only held during map lookups (fast path); the network I/O
+// in Ping/Open happens outside the lock so concurrent DSNs don't serialize.
 func (p *Pool) Get(dsn, driverName string) (*sql.DB, error) {
+	// Fast path: check cache under lock.
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.stopped {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("pool: already stopped")
 	}
-
 	if entry, ok := p.entries[dsn]; ok {
-		// Check if the connection is still alive.
+		// Ping under lock — for healthy pooled connections this is near-instant.
 		if err := entry.db.Ping(); err == nil {
 			entry.lastUsed = time.Now()
+			p.mu.Unlock()
 			return entry.db, nil
 		}
-		// Stale connection — close and reopen.
+		// Stale connection — close and remove while holding lock.
 		entry.db.Close()
 		delete(p.entries, dsn)
 	}
+	p.mu.Unlock()
 
+	// Open + Ping outside lock (network I/O — must not block other DSNs).
 	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("pool: open: %w", err)
@@ -83,6 +87,13 @@ func (p *Pool) Get(dsn, driverName string) (*sql.DB, error) {
 		return nil, fmt.Errorf("pool: ping: %w", err)
 	}
 
+	// Store under lock. Re-check stopped — may have changed during I/O.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		db.Close()
+		return nil, fmt.Errorf("pool: already stopped")
+	}
 	p.entries[dsn] = &poolEntry{
 		db:       db,
 		lastUsed: time.Now(),
@@ -97,6 +108,7 @@ func (p *Pool) CloseAll() {
 	p.stopped = true
 	entries := p.entries
 	p.entries = make(map[string]*poolEntry)
+	close(p.stopCh)
 	p.mu.Unlock()
 
 	for _, entry := range entries {
@@ -109,22 +121,19 @@ func (p *Pool) evictLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		p.mu.Lock()
-		now := time.Now()
-		for dsn, entry := range p.entries {
-			if now.After(entry.lastUsed.Add(p.timeout)) {
-				entry.db.Close()
-				delete(p.entries, dsn)
+	for {
+		select {
+		case <-ticker.C:
+			p.mu.Lock()
+			now := time.Now()
+			for dsn, entry := range p.entries {
+				if now.After(entry.lastUsed.Add(p.timeout)) {
+					entry.db.Close()
+					delete(p.entries, dsn)
+				}
 			}
-		}
-		p.mu.Unlock()
-
-		// Check if stopped.
-		p.mu.Lock()
-		stopped := p.stopped
-		p.mu.Unlock()
-		if stopped {
+			p.mu.Unlock()
+		case <-p.stopCh:
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-﻿package frontierbound
+package frontierbound
 
 import (
 	"context"
@@ -434,15 +434,17 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 					return nil, fmt.Errorf("push_db_instance_info: decode: %w", err)
 				}
 				canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
+				var hasErr bool
 				for _, inst := range in.Instances {
 					if err := w.DBInstanceIngester.UpsertFromDiscovery(rpcCtx, canonicalEdgeID, inst.DBType, inst.Name, inst.Host, inst.Port, inst.Version, inst.Status, inst.ConfigJSON); err != nil {
 						log.Warn("push_db_instance_info: upsert",
 							slog.Uint64("edge_id", canonicalEdgeID),
 							slog.String("name", inst.Name),
 							slog.Any("err", err))
+						hasErr = true
 					}
 				}
-				return json.Marshal(tunnel.PushDBInstanceInfoResponse{OK: true})
+				return json.Marshal(tunnel.PushDBInstanceInfoResponse{OK: !hasErr})
 			}); err != nil {
 				return fmt.Errorf("frontierbound: register %q: %w", tunnel.MethodPushDBInstanceInfo, err)
 			}

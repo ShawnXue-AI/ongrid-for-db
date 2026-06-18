@@ -1,4 +1,4 @@
-package database
+﻿package database
 
 import (
 	"context"
@@ -51,7 +51,7 @@ func (s *TopologySyncer) SyncDBInstance(ctx context.Context, inst *model.Databas
 		"status":  inst.Status,
 	}
 	propsJSON, _ := json.Marshal(props)
-	nodeName := fmt.Sprintf("%s (%s:%d)", inst.Name, inst.Host, inst.Port)
+	nodeName := fmt.Sprintf("database:%d (%s)", inst.ID, inst.Name)
 
 	// Try to find existing node by listing database-type nodes matching
 	// our name. Since Node.Type="database" + the node name is stable
@@ -109,7 +109,7 @@ func (s *TopologySyncer) RemoveDBInstance(ctx context.Context, inst *model.Datab
 	if s.topo == nil || inst == nil {
 		return nil
 	}
-	nodeName := fmt.Sprintf("%s (%s:%d)", inst.Name, inst.Host, inst.Port)
+	nodeName := fmt.Sprintf("database:%d (%s)", inst.ID, inst.Name)
 	nodes, _, err := s.topo.ListNodes(ctx, topobiz.NodeListFilter{
 		Type: string(topomodel.NodeTypeDB),
 		Q:    nodeName,

@@ -1,4 +1,4 @@
-// Command ongrid is the cloud-side manager binary. It composes the iam
+﻿// Command ongrid is the cloud-side manager binary. It composes the iam
 // and manager bounded contexts, exposes the public HTTP API, the
 // Prometheus /metrics endpoint, and the manager-side service-end SDK
 // that dials the upstream github.com/singchia/frontier broker.
@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -121,6 +122,7 @@ import (
 	managerbizreport "github.com/ongridio/ongrid/internal/manager/biz/report"
 	manageraudtdata "github.com/ongridio/ongrid/internal/manager/data/audit/store"
 	managerreportdata "github.com/ongridio/ongrid/internal/manager/data/report/store"
+	managerdbcredentials "github.com/ongridio/ongrid/internal/manager/data/database/credentials"
 	managerdbdata "github.com/ongridio/ongrid/internal/manager/data/database/store"
 	managerserveraiops "github.com/ongridio/ongrid/internal/manager/server/aiops"
 	managerserveralert "github.com/ongridio/ongrid/internal/manager/server/alert"
@@ -205,11 +207,13 @@ func main() {
 	if err != nil {
 		log.Warn("tracing: init failed (continuing without OTel)", slog.Any("err", err))
 	}
-	defer func() {
-		shutCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
-		_ = otelShutdown(shutCtx)
-	}()
+	if otelShutdown != nil {
+		defer func() {
+			shutCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = otelShutdown(shutCtx)
+		}()
+	}
 
 	// Open the configured DB backend (MySQL by default, SQLite opt-in) and
 	// run AutoMigrate-based schema management. Each data package exposes a
@@ -798,6 +802,17 @@ func main() {
 	dbTopo := managerbizdatabase.NewTopologySyncer(topologyUC, log)
 	databaseHandler.SetTopologySyncer(dbTopo)
 
+	// Encrypted credential store for database instances. Derives the AES-256
+	// key from the JWT secret so credentials are encrypted at rest without
+	// requiring a separate secret manager in Phase 1.
+	dbCredKey := sha256.Sum256([]byte(cfg.JWT.Secret))
+	dbCredStore, err := managerdbcredentials.NewStore(db, dbCredKey[:])
+	if err != nil {
+		log.Error("FATAL: init credential store", slog.Any("err", err))
+		os.Exit(1)
+	}
+	databaseHandler.SetCredentialStore(dbCredStore)
+
 	// Data plane auth verify — nginx auth_request
 	// calls this endpoint to validate edge basic-auth before proxy_pass'ing
 	// /loki/api/v1/push to internal Loki. Reuses the same edge credentials
@@ -1096,6 +1111,7 @@ func main() {
 	// query_change_events (HLD-013 Phase 2) — RCA "what changed near T".
 	// *audit.Usecase satisfies aiopstools.AuditLister via ListChanges.
 	toolsReg.SetAuditLister(auditUC)
+	toolsReg.SetCredentialResolver(dbCredStore)
 	// Populate deployment-level facts for the get_topology tool. Channel
 	// counter pulls from the alert repo's enabled-channel listing so the
 	// number reflects what notify_router actually fans out to.

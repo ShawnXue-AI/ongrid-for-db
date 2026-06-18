@@ -1,4 +1,4 @@
-// Package tools holds the manager/aiops tool registry: JSON-schema
+﻿// Package tools holds the manager/aiops tool registry: JSON-schema
 // definitions + executors that dispatch reverse calls to edges via the
 // frontierbound service-end SDK.
 //
@@ -58,6 +58,13 @@ type Tool struct {
 	Execute     func(ctx context.Context, args json.RawMessage) (ExecuteResult, error)
 }
 
+// CredentialResolver resolves database instance credentials server-side,
+// keeping them out of the LLM prompt context. Implementations should store
+// credentials encrypted (see internal/manager/data/database/credentials).
+type CredentialResolver interface {
+	LookupCredentials(ctx context.Context, instanceID uint64) (user, password string, found bool, err error)
+}
+
 // Registry bundles the Caller + edge usecase so tool executors can
 // dispatch RPCs to edges. It indexes tools by name. promQuery / logQuery /
 // traceQuery / alertUC are optional; when nil the corresponding query_* /
@@ -109,6 +116,11 @@ type Registry struct {
 	// configManager feeds conversational configuration draft/apply tools.
 	// Wired from cmd/main.go after the alert service exists.
 	configManager ConfigManager
+	// credentialResolver resolves database instance credentials server-side.
+	// When set, the query_database and inspect_schema tools resolve user/password
+	// from the credential store rather than requiring them from the LLM.
+	// Wired from cmd/main.go after the credentials store is initialised.
+	credentialResolver CredentialResolver
 
 	log   *slog.Logger
 	tools map[string]Tool
@@ -145,6 +157,11 @@ func (r *Registry) SetPluginConfigLister(p PluginConfigLister) {
 // the graph BaseTool registry. The legacy closure-style registry does not
 // expose these mutating flows.
 func (r *Registry) SetConfigManager(m ConfigManager) { r.configManager = m }
+
+// SetCredentialResolver wires the database credential resolver for the
+// query_database and inspect_schema tools. When set, user/password are
+// resolved server-side rather than passed through the LLM prompt context.
+func (r *Registry) SetCredentialResolver(c CredentialResolver) { r.credentialResolver = c }
 
 // NewRegistry builds a Registry and auto-registers the two MVP tools
 // (get_host_load, get_process_list). When promQuery / logQuery /

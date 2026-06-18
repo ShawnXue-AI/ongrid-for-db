@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Database, Clock, Activity, Server, BarChart3, MessageSquare, AlertTriangle, Search, ChevronDown, ChevronUp, Eye, Terminal, AlertCircle } from 'lucide-react';
 import { StatusPill } from '@/components/StatusPill';
@@ -14,6 +14,12 @@ import { usePoll } from '@/lib/usePoll';
 const DB_ICONS: Record<string, string> = {
   mysql: '🐬', postgresql: '🐘', redis: '🔴', mongodb: '🍃', oracle: '🟢', selectdb: '📊',
 };
+
+// escapePromQL escapes a label value for use in a PromQL label matcher.
+// See https://prometheus.io/docs/prometheus/latest/querying/basics/#time-series-selectors
+function escapePromQL(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
 
 interface MetricDef {
   label: string;
@@ -95,6 +101,8 @@ export default function DatabaseDetailPage() {
   const [metrics, setMetrics] = useState<MetricState[]>([]);
   const [promData, setPromData] = useState<Record<string, PromRangeResp | null>>({});
 
+  const mountedRef = useRef(true);
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
   // Probe state
   const [probeOpen, setProbeOpen] = useState(false);
   const [probeUser, setProbeUser] = useState('');
@@ -106,6 +114,8 @@ export default function DatabaseDetailPage() {
     if (!id) return;
     try {
       const r = await getDatabase(id);
+      if (!mountedRef.current) return;
+      if (!mountedRef.current) return;
       setInst(r);
       setError(null);
     } catch (err: any) {
@@ -121,10 +131,13 @@ export default function DatabaseDetailPage() {
     setProbeError(null);
     try {
       const resp = await probeDatabase(id, { user: probeUser, password: probePass });
+      if (!mountedRef.current) return;
       if (resp.error) {
         setProbeError(resp.error);
-      } else if (resp.updated_inst) {
-        setInst(resp.updated_inst);
+      } else {
+        if (resp.updated_inst) {
+          setInst(resp.updated_inst);
+        }
         setProbeOpen(false);
       }
     } catch (err: any) {
@@ -136,20 +149,23 @@ export default function DatabaseDetailPage() {
 
   useEffect(() => { void loadInst(); }, [loadInst]);
 
-  const now = useMemo(() => Date.now(), []);
-  const from = new Date(now - 3600000).toISOString();
-  const to = new Date(now).toISOString();
+  const [now, setNow] = useState(Date.now());
 
   const refreshMetrics = useCallback(async () => {
     if (!inst) return;
+    if (!mountedRef.current) return;
     const defs = DB_METRICS[inst.db_type] ?? [];
     const results: MetricState[] = [];
     const promResults: Record<string, PromRangeResp | null> = {};
+    const _from = new Date(Date.now() - 3600000).toISOString();
+    const _to = new Date(Date.now()).toISOString();
+    setNow(Date.now());
 
     for (const def of defs) {
-      const expr = def.expr.replace('{{db_type}}', inst.db_type);
+      const expr = def.expr.replace('{{db_type}}', escapePromQL(inst.db_type));
       try {
-        const resp = await promQueryRange({ expr, from, to, step: '60s' });
+        const resp = await promQueryRange({ expr, from: _from, to: _to, step: '60s' });
+      if (!mountedRef.current) return;
         promResults[def.label] = resp;
         let value: string | null = null;
         if (resp.matrix?.length > 0) {
@@ -166,7 +182,7 @@ export default function DatabaseDetailPage() {
     }
     setMetrics(results);
     setPromData(promResults);
-  }, [inst, from, to]);
+  }, [inst]);
 
   useEffect(() => { void refreshMetrics(); }, [refreshMetrics]);
   usePoll(refreshMetrics, 30000, !!inst?.id);
@@ -384,6 +400,17 @@ export default function DatabaseDetailPage() {
 
 // ─── Slow Query Panel ─────────────────────────────────────────────────────
 
+type SortIconProps = {
+  field: 'avg_latency_ms' | 'max_latency_ms' | 'exec_count';
+  sortField: 'avg_latency_ms' | 'max_latency_ms' | 'exec_count';
+  sortDir: 'asc' | 'desc';
+};
+
+const SortIcon = ({ field, sortField, sortDir }: SortIconProps) => {
+  if (sortField !== field) return null;
+  return sortDir === 'desc' ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
+};
+
 function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
   const { tr } = useI18n();
   const [phase, setPhase] = useState<'connect' | 'loading' | 'results' | 'error'>('connect');
@@ -398,7 +425,7 @@ function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const runAnalysis = async () => {
-    if (!sqUser) return;
+    if (!sqUser || !sqPass) return;
     setPhase('loading');
     setSqError(null);
     try {
@@ -440,10 +467,6 @@ function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
     }
   };
 
-  const SortIcon = ({ field }: { field: typeof sortField }) => {
-    if (sortField !== field) return null;
-    return sortDir === 'desc' ? <ChevronDown size={12} /> : <ChevronUp size={12} />;
-  };
 
   const formatLatency = (ms?: number): string => {
     if (ms == null) return '-';
@@ -641,7 +664,7 @@ function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
                       onClick={() => toggleSort('exec_count')}
                     >
                       <span className="flex items-center gap-1">
-                        {tr('执行次数', 'Calls')} <SortIcon field="exec_count" />
+                        {tr('执行次数', 'Calls')} <SortIcon field="exec_count" sortField={sortField} sortDir={sortDir} />
                       </span>
                     </th>
                     <th
@@ -649,7 +672,7 @@ function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
                       onClick={() => toggleSort('avg_latency_ms')}
                     >
                       <span className="flex items-center gap-1">
-                        {tr('平均延迟', 'Avg')} <SortIcon field="avg_latency_ms" />
+                        {tr('平均延迟', 'Avg')} <SortIcon field="avg_latency_ms" sortField={sortField} sortDir={sortDir} />
                       </span>
                     </th>
                     <th
@@ -657,7 +680,7 @@ function SlowQueryPanel({ inst }: { inst: DatabaseInstance }) {
                       onClick={() => toggleSort('max_latency_ms')}
                     >
                       <span className="flex items-center gap-1">
-                        {tr('最大延迟', 'Max')} <SortIcon field="max_latency_ms" />
+                        {tr('最大延迟', 'Max')} <SortIcon field="max_latency_ms" sortField={sortField} sortDir={sortDir} />
                       </span>
                     </th>
                     <th className="px-4 py-2 font-medium">

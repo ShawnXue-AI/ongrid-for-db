@@ -182,6 +182,9 @@ func parseCMSources(spec map[string]any) []SourceSpec {
 func (d *Discoverer) probeInstances(ctx context.Context, sources []SourceSpec) []tunnel.DBInstanceInfo {
 	var out []tunnel.DBInstanceInfo
 	for _, s := range sources {
+		if ctx.Err() != nil {
+			break
+		}
 		info := tunnel.DBInstanceInfo{
 			DBType:     s.DBType,
 			Name:       s.Name,

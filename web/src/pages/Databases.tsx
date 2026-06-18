@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Plus, Database, Server, AlertTriangle, Trash2, Search } from 'lucide-react';
 import { StatusPill } from '@/components/StatusPill';
@@ -59,12 +59,15 @@ export default function DatabasesPage() {
     db_type: 'mysql',
     host: '',
     port: 3306,
+  const mountedRef = useRef(true);
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
   });
 
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
       const r = await listDatabases(filterType ? { db_type: filterType } : undefined);
+      if (!mountedRef.current) return;
       let items = r ?? [];
       if (filterType) {
         items = items.filter((d) => d.db_type === filterType);
@@ -94,6 +97,7 @@ export default function DatabasesPage() {
   const handleCreate = async () => {
     try {
       const inst = await createDatabase(form);
+      if (!mountedRef.current) return;
       setInstances((prev) => [inst, ...prev]);
       setCreateOpen(false);
       setForm({ edge_id: 0, name: '', db_type: 'mysql', host: '', port: 3306 });
@@ -106,6 +110,7 @@ export default function DatabasesPage() {
     if (!deleteTarget) return;
     try {
       await deleteDatabase(deleteTarget.id);
+      if (!mountedRef.current) return;
       setInstances((prev) => prev.filter((d) => d.id !== deleteTarget.id));
       setDeleteTarget(null);
     } catch (err: any) {
