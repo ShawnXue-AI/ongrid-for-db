@@ -45,6 +45,7 @@ import {
   listFlowRuns,
   listFlowTools,
   runFlow,
+  testFlowNode,
   updateFlow,
   type Flow,
   type FlowToolMeta,
@@ -273,6 +274,9 @@ export default function FlowEditorPage() {
   const [activeRun, setActiveRun] = useState<{ run: FlowRun; nodes: FlowRunNode[] } | null>(null);
   const [lastRunNodes, setLastRunNodes] = useState<FlowRunNode[]>([]);
   const [copied, setCopied] = useState('');
+  const [testOut, setTestOut] = useState<Record<string, unknown>>({});
+  const [testing, setTesting] = useState(false);
+  const [testErr, setTestErr] = useState('');
   const seq = useRef(1);
   const pollRef = useRef<number | null>(null);
   const rfRef = useRef<ReactFlowInstance<CanvasNode, Edge> | null>(null);
@@ -407,6 +411,30 @@ export default function FlowEditorPage() {
     setSelectedID(null);
     setDirty(true);
   }, [selectedID, setNodes, setEdges]);
+
+  const runTest = useCallback(
+    async (node: CanvasNode) => {
+      if (!flow) return;
+      setTesting(true);
+      setTestErr('');
+      try {
+        const r = await testFlowNode(flow.id, {
+          node_type: node.data.flowType,
+          config: node.data.config,
+        });
+        if (r.error) {
+          setTestErr(r.error);
+        } else {
+          setTestOut((prev) => ({ ...prev, [node.id]: r.output }));
+        }
+      } catch (e) {
+        setTestErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setTesting(false);
+      }
+    },
+    [flow]
+  );
 
   const onSave = useCallback(async () => {
     if (!flow) return;
@@ -679,8 +707,25 @@ export default function FlowEditorPage() {
                 copied={copied}
               />
             )}
+            {canWrite && (selected.data.flowType === 'tool' || selected.data.flowType === 'llm' || selected.data.flowType === 'agent') && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => void runTest(selected)}
+                  disabled={testing}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-violet-700/60 bg-violet-950/30 px-2.5 py-1.5 text-[12px] font-medium text-violet-300 transition-colors hover:bg-violet-900/40 disabled:opacity-50"
+                >
+                  <Play size={13} />
+                  {testing ? tr('试跑中…', 'Testing…') : tr('试跑此节点（看真实输出）', 'Test this node (see real output)')}
+                </button>
+                {testErr && (
+                  <div className="mt-1 break-all rounded-md border border-red-900/50 bg-red-950/30 px-2 py-1 text-[11px] text-red-400">{testErr}</div>
+                )}
+              </div>
+            )}
             <SelfOutputRefs
               node={selected}
+              testOutput={testOut[selected.id]}
               runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
               onCopy={(ref) => {
                 void navigator.clipboard?.writeText(ref);
@@ -1246,24 +1291,31 @@ function UpstreamRefs({
 // known shape.
 function SelfOutputRefs({
   node,
+  testOutput,
   runNodes,
   onCopy,
   copied,
 }: {
   node: CanvasNode;
+  testOutput?: unknown;
   runNodes: FlowRunNode[];
   onCopy: (ref: string) => void;
   copied: string;
 }) {
   const { tr } = useI18n();
-  const { paths, live } = useMemo(() => {
+  const { paths, source } = useMemo(() => {
+    // Priority: a fresh node-level test run → the latest flow run → the
+    // node type's known shape.
+    if (testOutput && typeof testOutput === 'object' && Object.keys(testOutput as object).length) {
+      return { paths: flattenPaths(testOutput), source: 'test' as const };
+    }
     const ran = runNodes.find((r) => r.node_id === node.id);
     if (ran && ran.output && Object.keys(ran.output).length) {
-      return { paths: flattenPaths(ran.output), live: true };
+      return { paths: flattenPaths(ran.output), source: 'live' as const };
     }
     const hasSchema = !!(node.data.config?.output_schema);
-    return { paths: staticOutputHints(node.data.flowType, hasSchema), live: false };
-  }, [node, runNodes]);
+    return { paths: staticOutputHints(node.data.flowType, hasSchema), source: 'shape' as const };
+  }, [node, testOutput, runNodes]);
 
   if (paths.length === 0) return null;
 
@@ -1273,7 +1325,9 @@ function SelfOutputRefs({
         <span className="text-[11px] font-medium text-zinc-400">{tr('本节点输出', 'This node output')}</span>
         {copied ? (
           <span className="text-[10px] text-emerald-400">{tr('已复制', 'copied')}</span>
-        ) : live ? (
+        ) : source === 'test' ? (
+          <span className="rounded bg-violet-900/40 px-1 text-[8px] text-violet-300">{tr('试跑', 'tested')}</span>
+        ) : source === 'live' ? (
           <span className="rounded bg-emerald-900/40 px-1 text-[8px] text-emerald-400">{tr('实测', 'live')}</span>
         ) : (
           <span className="rounded bg-zinc-800 px-1 text-[8px] text-zinc-500">{tr('预估', 'shape')}</span>

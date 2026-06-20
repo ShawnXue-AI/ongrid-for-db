@@ -248,3 +248,26 @@ func entryTypeLabel(t string) string {
 	}
 	return t
 }
+
+// RunSingle executes ONE node in isolation (the node-level "test run" the
+// editor uses to surface a node's real output before it's wired into the
+// flow). It resolves the node's config against rc, runs the executor, and
+// returns the result — no persistence, no edge traversal.
+func (e *Engine) RunSingle(ctx context.Context, node GraphNode, rc *RunContext) (NodeResult, error) {
+	var cfg map[string]any
+	if len(node.Config) > 0 {
+		var raw map[string]any
+		if err := json.Unmarshal(node.Config, &raw); err != nil {
+			return NodeResult{}, fmt.Errorf("config: %w", err)
+		}
+		resolved, err := rc.ResolveValue(raw)
+		if err != nil {
+			return NodeResult{}, err
+		}
+		cfg, _ = resolved.(map[string]any)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	return e.exec.execute(ctx, node, cfg, rc)
+}

@@ -172,6 +172,41 @@ func (u *Usecase) Trigger(ctx context.Context, id uint64, input map[string]any, 
 	return u.triggerRun(ctx, id, NodeTriggerManual, input, by, true)
 }
 
+// TestNode executes a single node in isolation and returns its output —
+// the editor's "test run this node" affordance, so the user sees a node's
+// real output (and thus its referenceable fields) before wiring it into
+// the flow. Upstream {{nodes.*}} refs resolve against the flow's most
+// recent run outputs; triggerInput backs {{trigger.*}}. The error is
+// returned in-band (caller surfaces it in the UI, not as an HTTP failure).
+func (u *Usecase) TestNode(ctx context.Context, flowID uint64, nodeType string, configJSON json.RawMessage, triggerInput map[string]any) (any, error) {
+	if u.engine == nil {
+		return nil, errs.ErrNotWiredYet
+	}
+	// Seed upstream context from the latest run so refs to already-run
+	// nodes resolve; best-effort.
+	nodesCtx := map[string]any{}
+	if u.runs != nil && flowID > 0 {
+		if runs, err := u.runs.ListRuns(ctx, flowID, 1); err == nil && len(runs) > 0 {
+			if rnodes, err := u.runs.ListNodes(ctx, runs[0].ID); err == nil {
+				for _, rn := range rnodes {
+					var out any
+					if rn.OutputJSON != "" {
+						_ = json.Unmarshal([]byte(rn.OutputJSON), &out)
+					}
+					nodesCtx[rn.NodeID] = out
+				}
+			}
+		}
+	}
+	rc := &RunContext{Trigger: triggerInput, Nodes: nodesCtx, Vars: map[string]any{}}
+	node := GraphNode{ID: "test", Type: nodeType, Config: configJSON}
+	res, err := u.engine.RunSingle(ctx, node, rc)
+	if err != nil {
+		return nil, err
+	}
+	return res.Output, nil
+}
+
 // ListEnabledFlows returns every enabled flow — the dispatcher /
 // scheduler scan source.
 func (u *Usecase) ListEnabledFlows(ctx context.Context) ([]*model.Flow, error) {

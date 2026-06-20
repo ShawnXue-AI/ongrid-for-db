@@ -37,6 +37,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.With(h.requireWriter).Delete("/v1/flows/{id}", h.del)
 	r.With(h.requireWriter).Post("/v1/flows/{id}/toggle", h.toggle)
 	r.With(h.requireWriter).Post("/v1/flows/{id}/run", h.run)
+	r.With(h.requireWriter).Post("/v1/flows/{id}/test-node", h.testNode)
 	r.Get("/v1/flows/{id}/runs", h.listRuns)
 	r.Get("/v1/flow-runs/{run_id}", h.getRun)
 	r.Get("/v1/flow-tools", h.listTools)
@@ -266,6 +267,33 @@ func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, toRunDTO(run))
+}
+
+// testNode runs one node in isolation and returns its output (or the
+// execution error in-band) so the editor can show real output before the
+// node is wired in. Execution errors are 200 + {error} — only malformed
+// requests are HTTP errors.
+func (h *Handler) testNode(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		NodeType     string          `json:"node_type"`
+		Config       json.RawMessage `json:"config"`
+		TriggerInput map[string]any  `json:"trigger_input"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&in); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	out, runErr := h.uc.TestNode(r.Context(), id, in.NodeType, in.Config, in.TriggerInput)
+	if runErr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": runErr.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"output": out})
 }
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {

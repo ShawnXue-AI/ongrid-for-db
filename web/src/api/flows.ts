@@ -140,3 +140,14 @@ export type FlowToolMeta = {
 export function listFlowTools() {
   return request<{ items: FlowToolMeta[] }>('GET', '/flow-tools');
 }
+
+// testFlowNode runs a single node in isolation (editor "test run") and
+// returns its real output, so the user can see referenceable fields
+// before wiring the node into the flow. Execution errors come back as
+// { error } (HTTP 200), not a thrown ApiError.
+export function testFlowNode(
+  flowId: number,
+  body: { node_type: string; config: Record<string, unknown>; trigger_input?: Record<string, unknown> }
+) {
+  return request<{ output?: unknown; error?: string }>('POST', `/flows/${flowId}/test-node`, body);
+}
