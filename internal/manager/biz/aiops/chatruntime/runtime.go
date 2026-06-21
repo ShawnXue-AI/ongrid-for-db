@@ -213,6 +213,15 @@ type Config struct {
 	// Optional.
 	MentionResolver MentionResolver
 
+	// CredentialBinder (optional) maps the session's active skill names to
+	// the vault credential names their installed packs are bound to
+	// (HLD-017 design-time binding). The runtime attaches the result to ctx
+	// (basetool.WithBoundCredentials) so cloud_bash queues those credentials
+	// for injection at approve time — no LLM/user run-time choice. Wired
+	// post-construction via SetCredentialBinder (marketplace usecase is
+	// built after the runtime).
+	CredentialBinder CredentialBinder
+
 	// BasePrompt is the universal preamble prepended to every
 	// system prompt. Empty = none.
 	BasePrompt string
@@ -250,6 +259,13 @@ type Config struct {
 type ToolBagProvider interface {
 	DeferredTools() []basetool.BaseTool
 	AllTools() []basetool.BaseTool
+}
+
+// CredentialBinder resolves the vault credential NAMES bound to whichever
+// installed packs ship the given active skills (HLD-017). The marketplace
+// usecase satisfies this structurally. Returns nil when nothing is bound.
+type CredentialBinder interface {
+	BoundCredentialNamesForSkills(ctx context.Context, skillNames []string) []string
 }
 
 // Runtime is the cutover entry. Construct once at boot via
@@ -302,6 +318,16 @@ func (rt *Runtime) SetMentionResolver(r MentionResolver) {
 		return
 	}
 	rt.cfg.MentionResolver = r
+}
+
+// SetCredentialBinder wires the active-skill→bound-credentials resolver onto
+// the Runtime after construction (the marketplace usecase is built later than
+// the runtime — same chicken-and-egg as the cloud_bash proposer). nil-safe.
+func (rt *Runtime) SetCredentialBinder(b CredentialBinder) {
+	if rt == nil {
+		return
+	}
+	rt.cfg.CredentialBinder = b
 }
 
 // SetToolBag wires the unredacted ToolBag handle onto the Runtime so
@@ -459,6 +485,18 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	var activeSkills []*Skill
 	if rt.cfg.SkillRegistry != nil {
 		activeSkills = rt.cfg.SkillRegistry.Resolve(req.UserText, policy)
+	}
+	// 5·HLD-017: attach the active skills' design-time bound credentials to
+	// ctx so cloud_bash queues them for injection at approve time. The
+	// binding was chosen at install time; nothing is decided at run time.
+	if rt.cfg.CredentialBinder != nil && len(activeSkills) > 0 {
+		names := make([]string, 0, len(activeSkills))
+		for _, s := range activeSkills {
+			names = append(names, s.Name)
+		}
+		if creds := rt.cfg.CredentialBinder.BoundCredentialNamesForSkills(ctx, names); len(creds) > 0 {
+			ctx = basetool.WithBoundCredentials(ctx, creds)
+		}
 	}
 	// 5a. Top-level persona (Phase 2 of the user-Agent initiative): when
 	// the session was created with a chosen agent (sess.AgentID set), use

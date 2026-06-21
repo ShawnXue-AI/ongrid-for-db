@@ -31,9 +31,11 @@ const ToolNameCloudBash = "cloud_bash"
 // cmd/main.go over biz/approval.Usecase so this package doesn't import it.
 type CloudBashProposer interface {
 	// Propose queues the command for human approval and returns the
-	// approval id. credential is the optional vault credential name whose
-	// fields get injected as env at execute time.
-	Propose(ctx context.Context, command, credential, sessionID string, userID uint64) (id string, err error)
+	// approval id. credentials are the vault credential names whose fields
+	// get injected as env at execute time — the union of the LLM's optional
+	// per-call credential and the session's active-skill bound credentials
+	// (HLD-017 design-time binding).
+	Propose(ctx context.Context, command string, credentials []string, sessionID string, userID uint64) (id string, err error)
 }
 
 // CloudBashTool is the cloud_bash BaseTool.
@@ -88,6 +90,26 @@ type cloudBashArgs struct {
 	Credential string `json:"credential"`
 }
 
+// mergeCreds returns the de-duped union of the session's bound credentials
+// (from ctx) and an optional per-call credential, order-stable (bound first).
+func mergeCreds(bound []string, perCall string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(bound)+1)
+	add := func(c string) {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			return
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	for _, c := range bound {
+		add(c)
+	}
+	add(perCall)
+	return out
+}
+
 // InvokableRun queues an approval and returns a human-readable status. It
 // never executes the command itself (the approval executor does, post-
 // approval).
@@ -103,13 +125,19 @@ func (t *CloudBashTool) InvokableRun(ctx context.Context, argsJSON string, opts 
 		return "", fmt.Errorf("cloud_bash: command is required")
 	}
 	cfg := basetool.ResolveOptions(opts)
-	id, err := t.proposer.Propose(ctx, in.Command, strings.TrimSpace(in.Credential), "", cfg.UserID)
+	// Union the LLM's optional per-call credential with the session's
+	// active-skill bound credentials (HLD-017 design-time binding, attached
+	// to ctx by the runtime). De-duped, order-stable.
+	creds := mergeCreds(basetool.BoundCredentialsFromContext(ctx), strings.TrimSpace(in.Credential))
+	id, err := t.proposer.Propose(ctx, in.Command, creds, "", cfg.UserID)
 	if err != nil {
 		return "", fmt.Errorf("cloud_bash: propose: %w", err)
 	}
 	out := map[string]any{
 		"status":      "pending_approval",
 		"approval_id": id,
+		"credentials": creds, // surfaced on the inline approval card
+
 		// LLM-facing instruction (not user-visible copy): an interactive
 		// confirmation card is already rendered inline in this conversation,
 		// so the model must NOT invent a page/menu to visit or restate the

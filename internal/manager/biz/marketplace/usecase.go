@@ -428,6 +428,60 @@ func (uc *Usecase) SetBindings(ctx context.Context, caller Caller, packID string
 	return uc.repo.SetBindings(ctx, caller.TenantID, packID, string(b))
 }
 
+// BoundCredentialNamesForSkills returns the vault credential names bound to
+// any installed pack that ships one of the given (active) skill names
+// (HLD-017 design-time binding). The chat runtime calls this each turn with
+// the session's active skills and injects the result for cloud_bash. The
+// binding's KEY (declared slot vs manual "extra:") is irrelevant here — every
+// associated credential is injected by its own TYPE rule at exec. Best-effort:
+// unparsable rows are skipped; single-tenant (lists all). Satisfies
+// chatruntime.CredentialBinder structurally.
+func (uc *Usecase) BoundCredentialNamesForSkills(ctx context.Context, skillNames []string) []string {
+	if len(skillNames) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(skillNames))
+	for _, n := range skillNames {
+		want[n] = true
+	}
+	packs, err := uc.repo.List(ctx, 0) // single-tenant: every pack
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range packs {
+		if strings.TrimSpace(p.BindingsJSON) == "" {
+			continue
+		}
+		var caps CapabilityDeclaration
+		if err := json.Unmarshal([]byte(p.CapabilitiesJSON), &caps); err != nil {
+			continue
+		}
+		ships := false
+		for _, s := range caps.Skills {
+			if want[s.Name] {
+				ships = true
+				break
+			}
+		}
+		if !ships {
+			continue
+		}
+		var binds map[string]string
+		if err := json.Unmarshal([]byte(p.BindingsJSON), &binds); err != nil {
+			continue
+		}
+		for _, cred := range binds {
+			if cred != "" && !seen[cred] {
+				seen[cred] = true
+				out = append(out, cred)
+			}
+		}
+	}
+	return out
+}
+
 // AllowedRegistries is what the GET /v1/marketplace/registries
 // endpoint returns. Static today; resolves to AllowedSources +
 // "local" tag. The DevMode flag toggles every entry.

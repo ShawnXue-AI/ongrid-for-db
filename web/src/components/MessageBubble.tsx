@@ -293,6 +293,7 @@ function PendingApprovalCard({ approvalID, command }: { approvalID: string; comm
   const [resultText, setResultText] = useState('');
   const [errText, setErrText] = useState('');
   const [cmd, setCmd] = useState(command);
+  const [creds, setCreds] = useState<string[]>([]);
 
   // Reconcile with the authoritative server status on mount. When chat
   // history is reloaded, the persisted tool message carries only the result
@@ -307,13 +308,12 @@ function PendingApprovalCard({ approvalID, command }: { approvalID: string; comm
     getApproval(approvalID)
       .then((a) => {
         if (!alive) return;
-        if (!cmd) {
-          try {
-            const p = JSON.parse(a.payload) as { command?: string };
-            if (p.command) setCmd(p.command);
-          } catch {
-            /* payload not JSON — leave placeholder */
-          }
+        try {
+          const p = JSON.parse(a.payload) as { command?: string; credentials?: string[] };
+          if (!cmd && p.command) setCmd(p.command);
+          if (Array.isArray(p.credentials)) setCreds(p.credentials.filter(Boolean));
+        } catch {
+          /* payload not JSON — leave placeholder */
         }
         if (a.status === 'executed') {
           setState('done');
@@ -375,6 +375,16 @@ function PendingApprovalCard({ approvalID, command }: { approvalID: string; comm
         <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[11px] text-zinc-300">
           {cmd || tr('(命令)', '(command)')}
         </pre>
+        {creds.length > 0 && (
+          <div className="mb-2 flex flex-wrap items-center gap-1 text-[11px] text-zinc-400">
+            <span>{tr('将注入凭证：', 'Injects credentials: ')}</span>
+            {creds.map((c) => (
+              <span key={c} className="rounded bg-amber-950/40 px-1.5 py-0.5 font-mono text-amber-300 ring-1 ring-amber-800/40">
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
         {state === 'loading' && (
           <div className="flex items-center gap-1.5 text-zinc-500">
             <Loader2 size={12} className="animate-spin" />

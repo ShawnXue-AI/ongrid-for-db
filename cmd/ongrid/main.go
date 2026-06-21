@@ -1780,20 +1780,25 @@ func main() {
 	// and wire the cloud_bash tool's proposer seam to the approval inbox.
 	cloudBashRunner := runner.NewShellRunner()
 	approvalUC.RegisterExecutor("cloud_bash", func(ctx context.Context, payloadJSON string) (string, error) {
-		var p struct {
-			Command    string `json:"command"`
-			Credential string `json:"credential"`
-		}
+		var p cloudBashPayload
 		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
 			return "", err
 		}
+		names := append([]string(nil), p.Credentials...)
+		if p.Credential != "" { // legacy single-credential approvals
+			names = append(names, p.Credential)
+		}
+		// Resolve each bound credential's TYPE inject rule and merge into one
+		// env. Later credentials win on key collisions (rare across types).
 		env := map[string]string{}
-		if p.Credential != "" {
-			injected, _, err := secretUC.ResolveInjection(ctx, p.Credential)
+		for _, name := range names {
+			injected, _, err := secretUC.ResolveInjection(ctx, name)
 			if err != nil {
-				return "", fmt.Errorf("resolve credential %q: %w", p.Credential, err)
+				return "", fmt.Errorf("resolve credential %q: %w", name, err)
 			}
-			env = injected
+			for k, v := range injected {
+				env[k] = v
+			}
 		}
 		res, err := cloudBashRunner.Run(ctx, runner.Spec{Script: p.Command, Env: env})
 		if err != nil {
@@ -1826,6 +1831,10 @@ func main() {
 			aiopstoolsdec.Wrap(aiopstools.NewCloudBashTool(cloudBashProposerShim{uc: approvalUC}, log), cbDeps),
 		})
 		log.Info("cloud_bash bolted onto chat runtime bag", slog.Int("tool_count", chatRT.ToolCount()))
+		// HLD-017: wire the active-skill → bound-credentials resolver so
+		// cloud_bash auto-injects the credentials an active skill was bound
+		// to at install time (design-time binding, no run-time choice).
+		chatRT.SetCredentialBinder(mpUC)
 	}
 	if secretbox.KeyIsWeak() {
 		log.Warn("secret vault: ONGRID_SECRET_KEY unset — credentials encrypted with an INSECURE built-in key; set ONGRID_SECRET_KEY (32+ random chars) for real at-rest protection")
@@ -3173,24 +3182,30 @@ func (a webshellAuditAdapter) List(ctx context.Context, limit int) ([]*wsmodel.S
 // ReviewSpawner is wired, decide separately whether unattended flow runs
 // (cron/alert) should block on a human reviewer at all.
 // cloudBashProposerShim adapts biz/approval.Usecase to the
+// cloudBashPayload is the approval payload for a queued cloud_bash command.
+// Credentials are vault credential NAMES; the executor resolves each one's
+// TYPE inject rule into env vars at approve time. Credential (singular) is a
+// legacy field kept so an in-flight pre-upgrade approval still resolves.
+type cloudBashPayload struct {
+	Command     string   `json:"command"`
+	Credentials []string `json:"credentials,omitempty"`
+	Credential  string   `json:"credential,omitempty"` // legacy single
+}
+
 // aiopstools.CloudBashProposer seam — the cloud_bash tool calls Propose to
 // queue a command for human approval (HLD-017).
 type cloudBashProposerShim struct{ uc *managerbizapproval.Usecase }
 
-func (s cloudBashProposerShim) Propose(ctx context.Context, command, credential, sessionID string, userID uint64) (string, error) {
+func (s cloudBashProposerShim) Propose(ctx context.Context, command string, credentials []string, sessionID string, userID uint64) (string, error) {
 	title := command
 	if len(title) > 100 {
 		title = title[:100] + "…"
 	}
-	summary := ""
-	if credential != "" {
-		summary = "凭证 / credential: " + credential
-	}
 	a, err := s.uc.Propose(ctx, managerbizapproval.ProposeInput{
 		Kind:       "cloud_bash",
 		Title:      title,
-		Summary:    summary,
-		Payload:    map[string]string{"command": command, "credential": credential},
+		Summary:    strings.Join(credentials, ", "), // plain names; card shows them
+		Payload:    cloudBashPayload{Command: command, Credentials: credentials},
 		Source:     "agent",
 		SessionID:  sessionID,
 		ProposedBy: userID,
