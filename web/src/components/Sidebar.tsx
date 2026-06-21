@@ -29,7 +29,6 @@ import {
   Pencil,
   Trash2,
   Share2,
-  ShieldCheck,
   Workflow,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
@@ -439,7 +438,6 @@ export function Sidebar() {
           <SidebarNavItem to="/agents" icon={Bot} label={tr('助理', 'Assistants')} />
           <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
           <SidebarNavItem to="/workflows" icon={Workflow} label={tr('编排', 'Workflows')} />
-          {isAdmin && <SidebarNavItem to="/approvals" icon={ShieldCheck} label={tr('待确认', 'Approvals')} />}
         </NavSection>
 
         <SectionLabel>{tr('知识库', 'Knowledge')}</SectionLabel>
