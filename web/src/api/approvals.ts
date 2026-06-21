@@ -31,6 +31,10 @@ export function approvalsPendingCount() {
   return request<{ pending: number }>('GET', '/approvals/count');
 }
 
+export function getApproval(id: string) {
+  return request<Approval>('GET', `/approvals/${id}`);
+}
+
 export function approveApproval(id: string) {
   return request<Approval>('POST', `/approvals/${id}/approve`);
 }

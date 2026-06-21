@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, ShieldAlert, Check, X } from 'lucide-react';
 import type { ChatMessage, ToolCallSummary } from '@/api/chat';
-import { approveApproval, rejectApproval } from '@/api/approvals';
+import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
 
@@ -289,9 +289,54 @@ function argCommandText(args: unknown): string {
 // runs synchronously) and shows the result inline; reject discards it.
 function PendingApprovalCard({ approvalID, command }: { approvalID: string; command: string }) {
   const { tr } = useI18n();
-  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'rejected' | 'error'>('idle');
+  const [state, setState] = useState<'loading' | 'idle' | 'busy' | 'done' | 'rejected' | 'error' | 'stale'>('loading');
   const [resultText, setResultText] = useState('');
   const [errText, setErrText] = useState('');
+  const [cmd, setCmd] = useState(command);
+
+  // Reconcile with the authoritative server status on mount. When chat
+  // history is reloaded, the persisted tool message carries only the result
+  // blob (no arguments, no live status), so a long-decided proposal would
+  // otherwise replay with dead 批准/拒绝 buttons that 404 on click ("not
+  // found"). Mirrors ztna-agent's rule: a proposal's status is read from the
+  // store on replay, never trusted from the message. The approval record
+  // also carries the payload, so we recover the command text here too (fixes
+  // the "(命令)" placeholder on the reload path).
+  useEffect(() => {
+    let alive = true;
+    getApproval(approvalID)
+      .then((a) => {
+        if (!alive) return;
+        if (!cmd) {
+          try {
+            const p = JSON.parse(a.payload) as { command?: string };
+            if (p.command) setCmd(p.command);
+          } catch {
+            /* payload not JSON — leave placeholder */
+          }
+        }
+        if (a.status === 'executed') {
+          setState('done');
+          setResultText(a.result ?? '');
+        } else if (a.status === 'rejected') {
+          setState('rejected');
+        } else if (a.status === 'failed') {
+          setState('error');
+          setErrText(a.result ?? 'failed');
+        } else {
+          setState('idle'); // pending — offer the buttons
+        }
+      })
+      .catch(() => {
+        // Genuinely gone (404) or unreachable: never show dead buttons —
+        // point the user at the inbox instead of letting a click 404.
+        if (alive) setState('stale');
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalID]);
 
   const approve = async () => {
     setState('busy');
@@ -328,8 +373,19 @@ function PendingApprovalCard({ approvalID, command }: { approvalID: string; comm
       </div>
       <div className="px-3 pb-2.5">
         <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[11px] text-zinc-300">
-          {command || tr('(命令)', '(command)')}
+          {cmd || tr('(命令)', '(command)')}
         </pre>
+        {state === 'loading' && (
+          <div className="flex items-center gap-1.5 text-zinc-500">
+            <Loader2 size={12} className="animate-spin" />
+            {tr('加载审批状态…', 'Loading approval status…')}
+          </div>
+        )}
+        {state === 'stale' && (
+          <div className="text-zinc-500">
+            {tr('该审批已失效或已处理，请前往「待确认」页查看。', 'This approval is gone or already handled — see the Approvals page.')}
+          </div>
+        )}
         {state === 'idle' && (
           <div className="flex gap-2">
             <button
