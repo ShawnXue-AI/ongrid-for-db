@@ -42,6 +42,7 @@ import (
 	"github.com/ongridio/ongrid/internal/pkg/httpserver"
 	"github.com/ongridio/ongrid/internal/pkg/llm"
 	"github.com/ongridio/ongrid/internal/pkg/logger"
+	"github.com/ongridio/ongrid/internal/pkg/secretbox"
 
 	"encoding/json"
 	"strconv"
@@ -1734,6 +1735,9 @@ func main() {
 	// store installed skills (and future external-MCP clients) inject from.
 	secretUC := managerbizsecret.NewUsecase(managersecretdata.NewRepo(db))
 	secretHandler := managerserversecret.NewHandler(secretUC)
+	if secretbox.KeyIsWeak() {
+		log.Warn("secret vault: ONGRID_SECRET_KEY unset — credentials encrypted with an INSECURE built-in key; set ONGRID_SECRET_KEY (32+ random chars) for real at-rest protection")
+	}
 	log.Info("marketplace wired",
 		slog.Bool("dev_mode", mpDevMode),
 		slog.Bool("skill_reload", mpSkillReg != nil),

@@ -1,37 +1,35 @@
-// Package secret holds the persistence entity for the generic secret
-// store (HLD-017). It is the single, semantics-agnostic credential vault
-// that installed skills AND (future) external MCP servers draw from: each
-// skill/MCP manifest DECLARES the secret names it needs (metadata.requires.
-// env), the operator FILLS them here, and the runtime INJECTS them as
-// environment variables into the skill/MCP subprocess at exec time. ongrid
-// never hard-codes what a secret means — the manifest owns that.
+// Package secret holds the persistence entity for the credential vault
+// (HLD-017). Following the n8n model, a stored credential is a NAMED,
+// multi-FIELD instance (e.g. "tencent-prod" → {secret_id, secret_key,
+// region}), encrypted at rest. The consuming skill / external MCP server
+// declares in its manifest WHERE each field is injected (env var / file via
+// {{field}} placeholders); a per-skill binding picks WHICH instance fills
+// the slot. ongrid never hard-codes a credential's semantics — the manifest
+// owns the injection mapping, the binding owns the choice.
 //
-// At-rest posture matches the rest of ongrid (ADR-023): values live in the
-// same MySQL as everything else, in cleartext for the private-MVP; the
-// `Value` is redacted on every read API. AES-at-rest is a tracked
-// hardening follow-up, not an MVP blocker.
+// At-rest: the field map is JSON-encoded then sealed by pkg/secretbox
+// (AES-256-GCM, key from ONGRID_SECRET_KEY) before it touches the DB, so a
+// DB dump alone never yields plaintext (cf. n8n's encryption posture).
 package secret
 
 import "time"
 
-// Secret is one named credential value. Name is the injection key — it is
-// the exact environment-variable name the consuming skill/MCP expects
-// (e.g. "TENCENTCLOUD_SECRET_ID", "GITHUB_TOKEN"), so a manifest's
-// requires.env entry binds to a row by name with no extra mapping table.
+// Secret is one named credential instance — a bag of fields stored as a
+// single encrypted blob.
 type Secret struct {
 	ID uint64 `gorm:"primaryKey;autoIncrement"`
 
-	// Name is the unique injection key == the env var name the consumer
-	// reads. Uppercase-with-underscores by convention but not enforced
-	// (some tools want lowercase).
+	// Name is the unique human label the binding layer references
+	// (e.g. "tencent-prod", "github-bot"). NOT an env var name anymore —
+	// the manifest maps this instance's fields to env vars.
 	Name string `gorm:"size:128;not null;uniqueIndex"`
 
-	// Value is the secret material. Cleartext at rest (see package doc);
-	// NEVER returned by a list/get API — redacted to "" with HasValue set.
-	Value string `gorm:"type:text;not null"`
+	// Data is the AES-GCM-sealed JSON object of the credential's fields
+	// (map[string]string). Reuses the original `value` column so no schema
+	// churn from the single-value era. NEVER returned by a read API.
+	Data string `gorm:"column:value;type:text;not null"`
 
-	// Description is an optional human note ("Tencent Cloud prod secret
-	// key for the terraform skill").
+	// Description is an optional human note.
 	Description string `gorm:"size:512"`
 
 	CreatedAt time.Time `gorm:"autoCreateTime"`

@@ -48,15 +48,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name        string `json:"name"`
-		Value       string `json:"value"`
-		Description string `json:"description"`
+		Name        string            `json:"name"`
+		Description string            `json:"description"`
+		Fields      map[string]string `json:"fields"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
-	v, err := h.uc.Create(r.Context(), in.Name, in.Value, in.Description)
+	v, err := h.uc.Create(r.Context(), in.Name, in.Description, in.Fields)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -74,14 +74,14 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Value       string `json:"value"`
-		Description string `json:"description"`
+		Description string            `json:"description"`
+		Fields      map[string]string `json:"fields"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
-	if err := h.uc.Update(r.Context(), id, in.Value, in.Description); err != nil {
+	if err := h.uc.Update(r.Context(), id, in.Description, in.Fields); err != nil {
 		writeErr(w, err)
 		return
 	}
