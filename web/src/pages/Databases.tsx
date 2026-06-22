@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, Database, Server, AlertTriangle, Trash2, Search } from 'lucide-react';
 import { StatusPill } from '@/components/StatusPill';
 import { Modal } from '@/components/Modal';
@@ -40,6 +40,7 @@ const DB_COLORS: Record<string, string> = {
 export default function DatabasesPage() {
   const { tr } = useI18n();
   const location = useLocation();
+  const navigate = useNavigate();
   const { canMutate } = usePermissions();
 
   const filterType = useMemo(() => {
@@ -163,9 +164,7 @@ export default function DatabasesPage() {
                     href={href}
                     onClick={(e) => {
                       e.preventDefault();
-                      window.history.pushState(null, '', href);
-                      // Force re-render — Location-based filterType will pick up the new search
-                      setInstances((prev) => [...prev]);
+                      navigate(href, { replace: true });
                     }}
                     className={cn(
                       'rounded-md border px-2 py-0.5 text-[11px] transition-colors',

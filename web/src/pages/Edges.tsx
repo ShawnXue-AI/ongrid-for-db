@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Plus, RotateCw, Trash2, MoreVertical, Copy, Check, ExternalLink, TerminalSquare } from 'lucide-react';
+import { Plus, RotateCw, Trash2, MoreVertical, Copy, Check, ExternalLink, TerminalSquare, Search } from 'lucide-react';
 import { StatusPill } from '@/components/StatusPill';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
@@ -77,6 +77,7 @@ export default function EdgesPage() {
     secretKey: string;
   } | null>(null);
   const [rolesEditTarget, setRolesEditTarget] = useState<Edge | null>(null);
+  const [query, setQuery] = useState('');
   const [upgradeTarget, setUpgradeTarget] = useState<Edge | null>(null);
   // per-row "整包升级" busy state + last-result toast. We don't
   // open a modal — the action is single-click and the result lands in
@@ -113,6 +114,19 @@ export default function EdgesPage() {
     void refresh();
   }, [refresh]);
   usePoll(refresh, 10_000);
+
+  const filteredEdges = useMemo(() => {
+    if (!query.trim()) return edges;
+    const q = query.trim().toLowerCase();
+    return edges.filter((e) => {
+      const hostname = extractHostname(e.host_info) ?? '';
+      return (
+        (e.name || '').toLowerCase().includes(q) ||
+        hostname.toLowerCase().includes(q) ||
+        e.access_key_id.toLowerCase().includes(q)
+      );
+    });
+  }, [edges, query]);
 
   async function onCreate(name: string) {
     const created: CreateEdgeResponse = await createEdge({ name });
@@ -192,10 +206,21 @@ export default function EdgesPage() {
           <div>
             <h1 className="text-base font-semibold text-zinc-100">{headerTitle}</h1>
             <p className="mt-0.5 text-xs text-zinc-500">
-              {tr(`${edges.length} 台设备 · 每 10 秒自动刷新`, `${edges.length} device(s) · auto-refresh every 10s`)}
+              {tr(`${filteredEdges.length} 台设备 · 每 10 秒自动刷新`, `${filteredEdges.length} device(s) · auto-refresh every 10s`)}
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <label className="relative hidden w-48 sm:block">
+              <span className="sr-only">{tr('搜索', 'Search')}</span>
+              <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={tr('搜索名称 / 主机名', 'Search name / hostname')}
+                className="w-full rounded-md border border-zinc-800 bg-zinc-950/40 py-1.5 pl-8 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-700 focus:outline-none"
+              />
+            </label>
             <Link
               to="/edges/shell-sessions"
               className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
@@ -246,22 +271,24 @@ export default function EdgesPage() {
                       {tr('加载中…', 'Loading…')}
                     </td>
                   </tr>
-                ) : edges.length === 0 ? (
+                ) : filteredEdges.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-4 py-10 text-center text-zinc-500">
-                      {rolesFilter
-                        ? tr(
-                            `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
-                            `No ${ROLE_FILTER_TITLES[rolesFilter]?.[1] ?? rolesFilter} devices. Open a device detail page to assign roles.`,
-                          )
-                        : tr(
-                            '暂无设备。点击右上角"新建"创建一个。',
-                            'No devices yet. Click "New" in the top right to create one.',
-                          )}
+                      {edges.length > 0
+                        ? tr('没有匹配的设备，换个关键字试试', 'No matching devices, try a different keyword')
+                        : rolesFilter
+                          ? tr(
+                              `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
+                              `No ${ROLE_FILTER_TITLES[rolesFilter]?.[1] ?? rolesFilter} devices. Open a device detail page to assign roles.`,
+                            )
+                          : tr(
+                              '暂无设备。点击右上角"新建"创建一个。',
+                              'No devices yet. Click "New" in the top right to create one.',
+                            )}
                     </td>
                   </tr>
                 ) : (
-                  edges.map((e) => (
+                  filteredEdges.map((e) => (
                     <tr
                       key={e.id}
                       className="cursor-pointer transition-colors hover:bg-zinc-900/40"
