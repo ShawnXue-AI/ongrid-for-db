@@ -1112,6 +1112,10 @@ func main() {
 	// *audit.Usecase satisfies aiopstools.AuditLister via ListChanges.
 	toolsReg.SetAuditLister(auditUC)
 	toolsReg.SetCredentialResolver(dbCredStore)
+	// Wire the database instance metadata resolver so query_database and
+	// inspect_schema can resolve edge_id, db_type, host, and port from
+	// database_id automatically, keeping topology details out of LLM context.
+	toolsReg.SetInstanceResolver(dbInstanceResolver{repo: dbRepo})
 	// Populate deployment-level facts for the get_topology tool. Channel
 	// counter pulls from the alert repo's enabled-channel listing so the
 	// number reflects what notify_router actually fans out to.
@@ -3052,4 +3056,27 @@ func (a webshellAuditAdapter) Close(ctx context.Context, sessionID string, ended
 
 func (a webshellAuditAdapter) List(ctx context.Context, limit int) ([]*wsmodel.Session, error) {
 	return a.repo.List(ctx, limit)
+}
+
+// dbInstanceResolver adapts the database repo to the
+// aiopstools.InstanceResolver interface. It resolves database instance
+// connection metadata (edge_id, db_type, host, port) from database_id.
+type dbInstanceResolver struct {
+	repo *managerdbdata.Repo
+}
+
+func (r dbInstanceResolver) LookupInstance(ctx context.Context, instanceID uint64) (*aiopstools.ResolvedInstance, error) {
+	inst, err := r.repo.GetByID(ctx, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, nil
+	}
+	return &aiopstools.ResolvedInstance{
+		EdgeID: inst.EdgeID,
+		DBType: inst.DBType,
+		Host:   inst.Host,
+		Port:   inst.Port,
+	}, nil
 }

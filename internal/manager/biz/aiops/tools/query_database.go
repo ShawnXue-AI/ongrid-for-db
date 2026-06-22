@@ -28,7 +28,7 @@ var QueryDatabaseSchema = json.RawMessage(`{
   "properties": {
     "database_id": {
       "type": "integer",
-      "description": "Database instance ID (set by ongrid instance management)"
+      "description": "Database instance ID. When provided, edge_id, db_type, host, and port are resolved automatically from the database_instances table. Also resolves user/password from the credential store."
     },
     "edge_id": {
       "type": "integer",
@@ -99,6 +99,31 @@ func (r *Registry) executeQueryDatabase(ctx context.Context, args json.RawMessag
 	}
 	if in.Query == "" {
 		return ExecuteResult{}, fmt.Errorf("%s: query required", ToolNameQueryDatabase)
+	}
+
+	// Resolve instance metadata from database_id if connection fields are
+	// missing. This lets the LLM call with just database_id + query.
+	if in.DatabaseID > 0 && r.instanceResolver != nil {
+		if in.EdgeID == 0 || in.DBType == "" || in.Host == "" || in.Port == 0 {
+			inst, err := r.instanceResolver.LookupInstance(ctx, in.DatabaseID)
+			if err != nil {
+				return ExecuteResult{}, fmt.Errorf("%s: resolve instance %d: %w", ToolNameQueryDatabase, in.DatabaseID, err)
+			}
+			if inst != nil {
+				if in.EdgeID == 0 {
+					in.EdgeID = inst.EdgeID
+				}
+				if in.DBType == "" {
+					in.DBType = inst.DBType
+				}
+				if in.Host == "" {
+					in.Host = inst.Host
+				}
+				if in.Port == 0 {
+					in.Port = inst.Port
+				}
+			}
+		}
 	}
 
 	// Resolve credentials server-side if not provided by the caller.

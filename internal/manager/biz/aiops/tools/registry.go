@@ -1,4 +1,4 @@
-﻿// Package tools holds the manager/aiops tool registry: JSON-schema
+// Package tools holds the manager/aiops tool registry: JSON-schema
 // definitions + executors that dispatch reverse calls to edges via the
 // frontierbound service-end SDK.
 //
@@ -65,6 +65,25 @@ type CredentialResolver interface {
 	LookupCredentials(ctx context.Context, instanceID uint64) (user, password string, found bool, err error)
 }
 
+// ResolvedInstance holds the connection metadata for a database instance
+// resolved from the database_instances table by InstanceResolver.
+type ResolvedInstance struct {
+	EdgeID uint64
+	DBType string
+	Host   string
+	Port   int
+}
+
+// InstanceResolver resolves database instance connection metadata (edge_id,
+// db_type, host, port) from a database instance ID. This keeps instance
+// topology details out of the LLM prompt context, allowing the LLM to call
+// query_database(database_id=X, query="...") without manually supplying
+// connection parameters.
+// Returns (nil, nil) when the instance ID is not found.
+type InstanceResolver interface {
+	LookupInstance(ctx context.Context, instanceID uint64) (*ResolvedInstance, error)
+}
+
 // Registry bundles the Caller + edge usecase so tool executors can
 // dispatch RPCs to edges. It indexes tools by name. promQuery / logQuery /
 // traceQuery / alertUC are optional; when nil the corresponding query_* /
@@ -121,6 +140,11 @@ type Registry struct {
 	// from the credential store rather than requiring them from the LLM.
 	// Wired from cmd/main.go after the credentials store is initialised.
 	credentialResolver CredentialResolver
+	// instanceResolver resolves database instance connection metadata
+	// (edge_id, db_type, host, port) from a database instance ID.
+	// When set, the LLM can call query_database(database_id=X, query="...")
+	// without manually supplying connection parameters.
+	instanceResolver InstanceResolver
 
 	log   *slog.Logger
 	tools map[string]Tool
@@ -162,6 +186,11 @@ func (r *Registry) SetConfigManager(m ConfigManager) { r.configManager = m }
 // query_database and inspect_schema tools. When set, user/password are
 // resolved server-side rather than passed through the LLM prompt context.
 func (r *Registry) SetCredentialResolver(c CredentialResolver) { r.credentialResolver = c }
+
+// SetInstanceResolver wires the database instance metadata resolver for the
+// query_database and inspect_schema tools. When set, edge_id, db_type, host,
+// and port are resolved from a database_id automatically.
+func (r *Registry) SetInstanceResolver(ir InstanceResolver) { r.instanceResolver = ir }
 
 // NewRegistry builds a Registry and auto-registers the two MVP tools
 // (get_host_load, get_process_list). When promQuery / logQuery /

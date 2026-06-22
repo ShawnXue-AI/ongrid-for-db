@@ -101,8 +101,8 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// resolution can be injected uniformly.
 	if r.caller != nil {
 		resolver := deviceResolverAdapter{inner: NewDeviceResolver(r.devices, r.edges)}
-		out = append(out, NewQueryDatabaseTool(r.caller, r.credentialResolver, resolver, r.log))
-		out = append(out, NewInspectSchemaTool(r.caller, r.credentialResolver, resolver, r.log))
+		out = append(out, NewQueryDatabaseTool(r.caller, r.credentialResolver, r.instanceResolver, resolver, r.log))
+		out = append(out, NewInspectSchemaTool(r.caller, r.credentialResolver, r.instanceResolver, resolver, r.log))
 	}
 	// 4: query_logql — gated on Loki client.
 	if r.logQuery != nil {

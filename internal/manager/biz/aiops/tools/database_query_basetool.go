@@ -16,21 +16,25 @@ import (
 type QueryDatabaseTool struct {
 	caller             Caller
 	credentialResolver CredentialResolver
+	instanceResolver   InstanceResolver
 	resolver           hostFilesDeviceResolver
 	log                *slog.Logger
 }
 
 // NewQueryDatabaseTool builds the BaseTool variant. log may be nil
-// (degrades to slog.Default()). credentialResolver is optional — when set,
-// the tool resolves database credentials server-side, keeping passwords out
-// of the LLM prompt context.
-func NewQueryDatabaseTool(caller Caller, credentialResolver CredentialResolver, resolver hostFilesDeviceResolver, log *slog.Logger) *QueryDatabaseTool {
+// (degrades to slog.Default()). credentialResolver and instanceResolver are
+// optional — when credentialResolver is set, the tool resolves database
+// credentials server-side, keeping passwords out of the LLM prompt context.
+// When instanceResolver is set, the tool resolves connection parameters
+// (edge_id, db_type, host, port) from the database_id automatically.
+func NewQueryDatabaseTool(caller Caller, credentialResolver CredentialResolver, instanceResolver InstanceResolver, resolver hostFilesDeviceResolver, log *slog.Logger) *QueryDatabaseTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &QueryDatabaseTool{
 		caller:             caller,
 		credentialResolver: credentialResolver,
+		instanceResolver:   instanceResolver,
 		resolver:           resolver,
 		log:                log,
 	}
@@ -55,24 +59,49 @@ func (t *QueryDatabaseTool) InvokableRun(ctx context.Context, argsJSON string, _
 	}
 
 	var in struct {
-		DatabaseID      uint64 `json:"database_id,omitempty"`
-		EdgeID          uint64 `json:"edge_id,omitempty"`
-		DeviceID        uint64 `json:"device_id,omitempty"`
-		DBType          string `json:"db_type"`
-		Host            string `json:"host"`
-		Port            int    `json:"port"`
-		User            string `json:"user,omitempty"`
-		Password        string `json:"password,omitempty"`
-		Database        string `json:"database,omitempty"`
-		Query           string `json:"query"`
-		TimeoutSecs     int    `json:"timeout_secs"`
-		MaxRows         int    `json:"max_rows"`
+		DatabaseID  uint64 `json:"database_id,omitempty"`
+		EdgeID      uint64 `json:"edge_id,omitempty"`
+		DeviceID    uint64 `json:"device_id,omitempty"`
+		DBType      string `json:"db_type"`
+		Host        string `json:"host"`
+		Port        int    `json:"port"`
+		User        string `json:"user,omitempty"`
+		Password    string `json:"password,omitempty"`
+		Database    string `json:"database,omitempty"`
+		Query       string `json:"query"`
+		TimeoutSecs int    `json:"timeout_secs"`
+		MaxRows     int    `json:"max_rows"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("%s: bad args: %w", ToolNameQueryDatabase, err)
 	}
 	if in.Query == "" {
 		return "", fmt.Errorf("%s: query required", ToolNameQueryDatabase)
+	}
+
+	// Resolve instance metadata from database_id if connection fields are
+	// missing. This lets the LLM call with just database_id + query.
+	if in.DatabaseID > 0 && t.instanceResolver != nil {
+		if in.EdgeID == 0 || in.DBType == "" || in.Host == "" || in.Port == 0 {
+			inst, err := t.instanceResolver.LookupInstance(ctx, in.DatabaseID)
+			if err != nil {
+				return "", fmt.Errorf("%s: resolve instance %d: %w", ToolNameQueryDatabase, in.DatabaseID, err)
+			}
+			if inst != nil {
+				if in.EdgeID == 0 {
+					in.EdgeID = inst.EdgeID
+				}
+				if in.DBType == "" {
+					in.DBType = inst.DBType
+				}
+				if in.Host == "" {
+					in.Host = inst.Host
+				}
+				if in.Port == 0 {
+					in.Port = inst.Port
+				}
+			}
+		}
 	}
 
 	// Resolve device_id → edge_id, falling back to direct edge_id.
@@ -158,19 +187,21 @@ func (t *QueryDatabaseTool) InvokableRun(ctx context.Context, argsJSON string, _
 type InspectSchemaTool struct {
 	caller             Caller
 	credentialResolver CredentialResolver
+	instanceResolver   InstanceResolver
 	resolver           hostFilesDeviceResolver
 	log                *slog.Logger
 }
 
 // NewInspectSchemaTool builds the BaseTool variant. log may be nil.
-// credentialResolver is optional.
-func NewInspectSchemaTool(caller Caller, credentialResolver CredentialResolver, resolver hostFilesDeviceResolver, log *slog.Logger) *InspectSchemaTool {
+// credentialResolver and instanceResolver are optional.
+func NewInspectSchemaTool(caller Caller, credentialResolver CredentialResolver, instanceResolver InstanceResolver, resolver hostFilesDeviceResolver, log *slog.Logger) *InspectSchemaTool {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &InspectSchemaTool{
 		caller:             caller,
 		credentialResolver: credentialResolver,
+		instanceResolver:   instanceResolver,
 		resolver:           resolver,
 		log:                log,
 	}
@@ -195,22 +226,47 @@ func (t *InspectSchemaTool) InvokableRun(ctx context.Context, argsJSON string, _
 	}
 
 	var in struct {
-		DatabaseID      uint64 `json:"database_id,omitempty"`
-		EdgeID          uint64 `json:"edge_id,omitempty"`
-		DeviceID        uint64 `json:"device_id,omitempty"`
-		DBType          string `json:"db_type"`
-		Host            string `json:"host"`
-		Port            int    `json:"port"`
-		User            string `json:"user,omitempty"`
-		Password        string `json:"password,omitempty"`
-		Database        string `json:"database"`
-		TableName       string `json:"table_name,omitempty"`
+		DatabaseID uint64 `json:"database_id,omitempty"`
+		EdgeID     uint64 `json:"edge_id,omitempty"`
+		DeviceID   uint64 `json:"device_id,omitempty"`
+		DBType     string `json:"db_type"`
+		Host       string `json:"host"`
+		Port       int    `json:"port"`
+		User       string `json:"user,omitempty"`
+		Password   string `json:"password,omitempty"`
+		Database   string `json:"database"`
+		TableName  string `json:"table_name,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("%s: bad args: %w", ToolNameInspectSchema, err)
 	}
 	if in.Database == "" {
 		return "", fmt.Errorf("%s: database required", ToolNameInspectSchema)
+	}
+
+	// Resolve instance metadata from database_id if connection fields are
+	// missing. This lets the LLM call with just database_id + database name.
+	if in.DatabaseID > 0 && t.instanceResolver != nil {
+		if in.EdgeID == 0 || in.DBType == "" || in.Host == "" || in.Port == 0 {
+			inst, err := t.instanceResolver.LookupInstance(ctx, in.DatabaseID)
+			if err != nil {
+				return "", fmt.Errorf("%s: resolve instance %d: %w", ToolNameInspectSchema, in.DatabaseID, err)
+			}
+			if inst != nil {
+				if in.EdgeID == 0 {
+					in.EdgeID = inst.EdgeID
+				}
+				if in.DBType == "" {
+					in.DBType = inst.DBType
+				}
+				if in.Host == "" {
+					in.Host = inst.Host
+				}
+				if in.Port == 0 {
+					in.Port = inst.Port
+				}
+			}
+		}
 	}
 
 	// Resolve device_id → edge_id, falling back to direct edge_id.
