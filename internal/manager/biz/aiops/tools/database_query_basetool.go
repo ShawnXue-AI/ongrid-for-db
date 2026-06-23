@@ -132,7 +132,7 @@ func (t *QueryDatabaseTool) InvokableRun(ctx context.Context, argsJSON string, _
 		}
 	}
 	if in.User == "" || in.Password == "" {
-		return "", fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run "Probe Connectivity" (will store credentials), then retry.", ToolNameQueryDatabase, in.DatabaseID)
+		return "", fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run \"Probe Connectivity\" (will store credentials), then retry.", ToolNameQueryDatabase, in.DatabaseID)
 	}
 
 	// Build the skill params.
@@ -297,7 +297,7 @@ func (t *InspectSchemaTool) InvokableRun(ctx context.Context, argsJSON string, _
 		}
 	}
 	if in.User == "" || in.Password == "" {
-		return "", fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run "Probe Connectivity" (will store credentials), then retry.", ToolNameInspectSchema, in.DatabaseID)
+		return "", fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run \"Probe Connectivity\" (will store credentials), then retry.", ToolNameInspectSchema, in.DatabaseID)
 	}
 
 	// Helper to run a query via db_exec_query on the edge.

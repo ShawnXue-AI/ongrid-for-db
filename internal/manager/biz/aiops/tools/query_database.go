@@ -143,7 +143,7 @@ func (r *Registry) executeQueryDatabase(ctx context.Context, args json.RawMessag
 		}
 	}
 	if in.User == "" || in.Password == "" {
-		return ExecuteResult{}, fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run "Probe Connectivity" (will store credentials), then retry.", ToolNameQueryDatabase, in.DatabaseID)
+		return ExecuteResult{}, fmt.Errorf("%s: user and password are required. The credential store has no entry for database_id=%d — credentials are automatically saved on the first connectivity probe or slow-query fetch. Go to the database detail page, run \"Probe Connectivity\" (will store credentials), then retry.", ToolNameQueryDatabase, in.DatabaseID)
 	}
 
 	// Build the skill params.
