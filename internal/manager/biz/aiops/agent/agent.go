@@ -82,6 +82,13 @@ const (
 	// layer can carry the chatruntime kernel's task_notification frame
 	// through the same eventName / eventPayload translation as the rest.
 	EventTaskNotification EventType = "task_notification"
+	// EventApprovalPending fires when a synchronous-blocking tool
+	// (HLD-021, e.g. cloud_bash) queues a human-approval proposal and is
+	// about to block on the decision. Carries the live approve/reject card
+	// payload; the legacy agent never emits it, but the constant exists so
+	// the SSE layer carries the chatruntime kernel's approval_pending frame
+	// through the same eventName / eventPayload translation as the rest.
+	EventApprovalPending EventType = "approval_pending"
 )
 
 // Event is the streaming envelope. Exactly one of the optional pointer
@@ -92,6 +99,19 @@ type Event struct {
 	Tool         *ToolEvent
 	Done         *Reply
 	Notification *TaskNotificationEvent
+	Approval     *ApprovalPendingEvent
+}
+
+// ApprovalPendingEvent carries the approval_pending payload. Mirrors the
+// chatruntime.ApprovalPending shape; translation happens in
+// service/aiops/service.go::translateRuntimeEvent. Fields stay exported so
+// the http SSE renderer can copy them into JSON without reaching into
+// chatruntime.
+type ApprovalPendingEvent struct {
+	ApprovalID  string
+	ToolCallID  string
+	Command     string
+	Credentials []string
 }
 
 // TaskNotificationEvent carries the task_notification payload.

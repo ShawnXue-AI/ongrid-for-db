@@ -1905,7 +1905,13 @@ func main() {
 	// both whitelist cloud_bash, so this single append reaches both.
 	if chatRT != nil {
 		cbDeps := aiopstoolsdec.Deps{
-			Timeout:    30 * time.Second,
+			// HLD-021: cloud_bash now BLOCKS in-tool until the human approves
+			// (synchronous propose-confirm), so the per-call timeout must
+			// outlast the approval wait budget (approvalWaitTimeout = 30m) —
+			// a minute longer so the tool's own clean timeout blob wins over a
+			// decorator-imposed ErrToolTimeout. install_skill (same deps)
+			// still returns instantly, so the long bound is harmless there.
+			Timeout:    approvalWaitTimeout + time.Minute,
 			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
 			Registerer: reg,
 		}
@@ -3348,11 +3354,23 @@ type cloudBashPayload struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// aiopstools.CloudBashProposer seam — the cloud_bash tool calls Propose to
-// queue a command for human approval (HLD-017).
+// approvalWaitTimeout bounds how long a synchronous-blocking tool (HLD-021,
+// cloud_bash) waits for a human decision before giving up and returning a
+// terminal timeout blob. The decorator timeout that wraps the tool is set a
+// minute longer (cbDeps.Timeout) so THIS budget is the one that fires first
+// with a clean message.
+const approvalWaitTimeout = 30 * time.Minute
+
+// approvalPollInterval is how often the blocking tool re-reads the approval
+// row while waiting for the human decision.
+const approvalPollInterval = 1500 * time.Millisecond
+
+// aiopstools.CloudBashProposer seam — the cloud_bash tool calls
+// ProposeAndAwait to queue a command, surface the inline card, then block on
+// the human decision and get back the real result (HLD-021).
 type cloudBashProposerShim struct{ uc *managerbizapproval.Usecase }
 
-func (s cloudBashProposerShim) Propose(ctx context.Context, command string, credentials []string, sessionID string, userID uint64) (string, error) {
+func (s cloudBashProposerShim) ProposeAndAwait(ctx context.Context, command string, credentials []string, sessionID, toolCallID string, userID uint64) (string, error) {
 	title := command
 	if len(title) > 100 {
 		title = title[:100] + "…"
@@ -3369,7 +3387,68 @@ func (s cloudBashProposerShim) Propose(ctx context.Context, command string, cred
 	if err != nil {
 		return "", err
 	}
-	return a.ID, nil
+	// Surface the inline approve/reject card LIVE on the SSE stream that owns
+	// this chat turn. The tool no longer returns a pending_approval result
+	// blob (HLD-021: it blocks, then returns the real output), so the card is
+	// driven by this frame. ToolCallID lets the SPA render it AS the tool
+	// call's existing streaming card (single card). Best-effort: a blocking
+	// (non-SSE) caller has no emitter — the card just won't show, but the
+	// approval still sits in the inbox.
+	if emit := aiopschatruntime.EmitFromContext(ctx); emit != nil {
+		emit(aiopschatruntime.Event{
+			Type: aiopschatruntime.EventApprovalPending,
+			Approval: &aiopschatruntime.ApprovalPending{
+				ApprovalID:  a.ID,
+				ToolCallID:  toolCallID,
+				Command:     command,
+				Credentials: credentials,
+			},
+		})
+	}
+	return s.awaitDecision(ctx, a.ID)
+}
+
+// awaitDecision blocks until the approval row reaches a terminal state, then
+// returns the tool result string the ReAct loop continues with. The approve
+// REST handler runs the executor synchronously and records the result, so a
+// poll only ever reads it back — there is no double execution. "approved"
+// (executor mid-run, result not yet stored) is treated as non-terminal:
+// cloud_bash always has an executor, so it transitions to executed/failed
+// shortly; the timeout is the backstop.
+func (s cloudBashProposerShim) awaitDecision(ctx context.Context, id string) (string, error) {
+	deadline := time.Now().Add(approvalWaitTimeout)
+	ticker := time.NewTicker(approvalPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Stream closed (user navigated away) — stop waiting. The
+			// approval remains pending in the inbox for later decision.
+			return `{"status":"cancelled","message":"The approval wait was interrupted; the command was not run."}`, nil
+		case <-ticker.C:
+			a, err := s.uc.Get(ctx, id)
+			if err != nil {
+				continue // transient read error — keep polling
+			}
+			switch a.Status {
+			case "executed":
+				if a.ResultJSON != nil {
+					return *a.ResultJSON, nil
+				}
+				return `{"status":"executed"}`, nil
+			case "failed":
+				if a.ResultJSON != nil {
+					return *a.ResultJSON, nil
+				}
+				return `{"status":"failed","message":"The approved command failed to run."}`, nil
+			case "rejected":
+				return `{"status":"rejected","message":"The user rejected this command; it was not run. Do not retry it without new instructions."}`, nil
+			}
+			if time.Now().After(deadline) {
+				return `{"status":"timeout","message":"No approval within 30 minutes; the command was not run."}`, nil
+			}
+		}
+	}
 }
 
 // installSkillPayload is the approval payload for a queued conversational

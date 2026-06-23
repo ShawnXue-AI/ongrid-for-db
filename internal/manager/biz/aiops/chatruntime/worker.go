@@ -188,6 +188,25 @@ type TaskNotification struct {
 // done frames.
 const EventTaskNotification EventType = "task_notification"
 
+// EventApprovalPending fires when a synchronous-blocking tool (HLD-021,
+// e.g. cloud_bash) has queued a human-approval proposal and is about to
+// block waiting for the decision. The frame surfaces the inline approve/
+// reject card LIVE — the tool no longer returns a pending_approval result
+// blob (it blocks, then returns the real executor result), so the card
+// must be driven by this frame instead. ToolCallID ties the card to the
+// tool call's existing streaming card so the UI shows a single card.
+const EventApprovalPending EventType = "approval_pending"
+
+// ApprovalPending is the EventApprovalPending payload. Emitted by the
+// proposer shim (cmd/main.go) via EmitFromContext while a blocking tool
+// awaits the human decision.
+type ApprovalPending struct {
+	ApprovalID  string
+	ToolCallID  string
+	Command     string
+	Credentials []string
+}
+
 // emitCtxKey is the unexported context key that threads the active
 // per-request Emit through the graph layer down into AgentTool's
 // InvokableRun via the WorkerSpawner shim. The shim reads it through

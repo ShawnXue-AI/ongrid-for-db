@@ -458,6 +458,8 @@ func eventName(t agent.EventType) string {
 		return "done"
 	case agent.EventTaskNotification:
 		return "task_notification"
+	case agent.EventApprovalPending:
+		return "approval_pending"
 	default:
 		return string(t)
 	}
@@ -541,6 +543,20 @@ func eventPayload(sessionID string, e agent.Event) any {
 		}
 		if len(e.Notification.Usage) > 0 {
 			out["usage"] = e.Notification.Usage
+		}
+		return out
+	case agent.EventApprovalPending:
+		if e.Approval == nil {
+			return map[string]any{"session_id": sessionID}
+		}
+		out := map[string]any{
+			"session_id":   sessionID,
+			"approval_id":  e.Approval.ApprovalID,
+			"tool_call_id": e.Approval.ToolCallID,
+			"command":      e.Approval.Command,
+		}
+		if len(e.Approval.Credentials) > 0 {
+			out["credentials"] = e.Approval.Credentials
 		}
 		return out
 	default:

@@ -136,6 +136,10 @@ type Event struct {
 	Done         *Reply
 	Error        string
 	Notification *TaskNotification
+	// Approval carries the approval_pending payload — set when
+	// Type == EventApprovalPending and a blocking tool (cloud_bash) has
+	// queued a proposal and is awaiting the human decision (HLD-021).
+	Approval *ApprovalPending
 }
 
 // Emit is the streaming callback. nil-safe.

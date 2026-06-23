@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/cloudwego/eino/compose"
 	"github.com/ongridio/ongrid/internal/manager/biz/aiops/tools/basetool"
 )
 
@@ -30,12 +31,18 @@ const ToolNameCloudBash = "cloud_bash"
 // CloudBashProposer is the narrow seam to the approval inbox. Implemented in
 // cmd/main.go over biz/approval.Usecase so this package doesn't import it.
 type CloudBashProposer interface {
-	// Propose queues the command for human approval and returns the
-	// approval id. credentials are the vault credential names whose fields
-	// get injected as env at execute time — the union of the LLM's optional
-	// per-call credential and the session's active-skill bound credentials
-	// (HLD-017 design-time binding).
-	Propose(ctx context.Context, command string, credentials []string, sessionID string, userID uint64) (id string, err error)
+	// ProposeAndAwait queues the command for human approval, surfaces an
+	// inline approve/reject card on the live SSE stream, then BLOCKS until
+	// the human decides (or a timeout). It returns the executor's REAL
+	// result on approve (so the ReAct loop continues naturally with the
+	// command output, HLD-021), or a terminal status blob on reject/timeout.
+	//
+	// credentials are the vault credential names whose fields get injected
+	// as env at execute time — the union of the LLM's optional per-call
+	// credential and the session's active-skill bound credentials (HLD-017
+	// design-time binding). toolCallID ties the live card to this tool
+	// call's existing streaming card so the UI renders a single card.
+	ProposeAndAwait(ctx context.Context, command string, credentials []string, sessionID, toolCallID string, userID uint64) (result string, err error)
 }
 
 // CloudBashTool is the cloud_bash BaseTool.
@@ -69,9 +76,9 @@ var CloudBashSchema = json.RawMessage(`{
 }`)
 
 const cloudBashWhenToUse = "在云端(manager)运行命令——terraform / 云厂商 CLI / kubectl 等操作云资源的命令。" +
-	"不同于 host_bash(在某台设备上跑)。注意:每次调用都不会立即执行,而是在当前对话里直接弹出一张确认卡片," +
-	"用户当场点击批准或拒绝,批准后才运行。所以可以放心发起,但**不要**引导用户去任何页面或菜单(确认就在对话里)。" +
-	"需要云凭证时传 credential(凭证库里的名字)。"
+	"不同于 host_bash(在某台设备上跑)。注意:每次调用都会在当前对话里直接弹出一张确认卡片,用户当场点击批准或拒绝;" +
+	"这个工具调用会一直阻塞等待,用户批准后立刻执行并把真实的命令输出返回给你(就像普通工具一样),你再据此继续。" +
+	"所以可以放心发起,但**不要**引导用户去任何页面或菜单(确认就在对话里)。需要云凭证时传 credential(凭证库里的名字)。"
 
 // Info — Class=destructive: cloud_bash can run anything with cloud creds, so
 // it always carries the highest gate (and routes through human approval).
@@ -110,9 +117,13 @@ func mergeCreds(bound []string, perCall string) []string {
 	return out
 }
 
-// InvokableRun queues an approval and returns a human-readable status. It
-// never executes the command itself (the approval executor does, post-
-// approval).
+// InvokableRun queues an approval, surfaces the inline approve/reject card,
+// and BLOCKS until the human decides (HLD-021 synchronous propose-confirm,
+// modeled on ztna-agent's ReAct loop). On approve it returns the executor's
+// REAL command output so the ReAct loop continues naturally; on reject/
+// timeout it returns a terminal status blob. The command is never executed
+// here — the approval executor runs it once, post-approval; this tool only
+// waits and reads the recorded result.
 func (t *CloudBashTool) InvokableRun(ctx context.Context, argsJSON string, opts ...basetool.InvokeOption) (string, error) {
 	if t.proposer == nil {
 		return "", fmt.Errorf("cloud_bash: approval inbox not wired")
@@ -129,24 +140,18 @@ func (t *CloudBashTool) InvokableRun(ctx context.Context, argsJSON string, opts 
 	// active-skill bound credentials (HLD-017 design-time binding, attached
 	// to ctx by the runtime). De-duped, order-stable.
 	creds := mergeCreds(basetool.BoundCredentialsFromContext(ctx), strings.TrimSpace(in.Credential))
+	// eino's authoritative per-call id (compose.GetToolCallID) ties the live
+	// approval card to THIS tool call's existing streaming card so the UI
+	// renders a single card instead of a duplicate. Empty under the legacy
+	// kernel — the proposer falls back to a standalone card.
+	toolCallID := compose.GetToolCallID(ctx)
 	// HLD-019: carry the session id into the approval so the execute-on-approve
 	// hook runs the command in this session's persistent workspace.
-	id, err := t.proposer.Propose(ctx, in.Command, creds, basetool.SessionIDFromContext(ctx), cfg.UserID)
+	// HLD-021: ProposeAndAwait blocks until the human decides and returns the
+	// executor's real result, so the ReAct loop continues with the output.
+	result, err := t.proposer.ProposeAndAwait(ctx, in.Command, creds, basetool.SessionIDFromContext(ctx), toolCallID, cfg.UserID)
 	if err != nil {
 		return "", fmt.Errorf("cloud_bash: propose: %w", err)
 	}
-	out := map[string]any{
-		"status":      "pending_approval",
-		"approval_id": id,
-		"credentials": creds, // surfaced on the inline approval card
-
-		// LLM-facing instruction (not user-visible copy): an interactive
-		// confirmation card is already rendered inline in this conversation,
-		// so the model must NOT invent a page/menu to visit or restate the
-		// command/id/status — the card already shows all of that. Keep the
-		// reply to one short sentence, in the conversation's language.
-		"message": "An interactive confirmation card is now shown inline in this conversation. Do NOT tell the user to open any page or menu, do NOT restate the command, approval id, or a status table, and do NOT name a specific button label (its text follows the user's UI language). Reply with a single short sentence saying the command needs the user's confirmation in this conversation before it runs.",
-	}
-	b, _ := json.Marshal(out)
-	return string(b), nil
+	return result, nil
 }

@@ -380,6 +380,14 @@ func translateRuntimeEvent(ev chatruntime.Event) agent.Event {
 			Usage:   ev.Notification.Usage,
 		}
 	}
+	if ev.Approval != nil {
+		out.Approval = &agent.ApprovalPendingEvent{
+			ApprovalID:  ev.Approval.ApprovalID,
+			ToolCallID:  ev.Approval.ToolCallID,
+			Command:     ev.Approval.Command,
+			Credentials: ev.Approval.Credentials,
+		}
+	}
 	return out
 }
 

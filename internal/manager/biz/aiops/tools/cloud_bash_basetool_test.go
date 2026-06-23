@@ -9,16 +9,20 @@ import (
 )
 
 type recProposer struct {
-	gotSession string
-	gotCmd     string
-	gotCreds   []string
+	gotSession    string
+	gotCmd        string
+	gotCreds      []string
+	gotToolCallID string
 }
 
-func (r *recProposer) Propose(_ context.Context, command string, credentials []string, sessionID string, _ uint64) (string, error) {
+func (r *recProposer) ProposeAndAwait(_ context.Context, command string, credentials []string, sessionID, toolCallID string, _ uint64) (string, error) {
 	r.gotSession = sessionID
 	r.gotCmd = command
 	r.gotCreds = credentials
-	return "approval-1", nil
+	r.gotToolCallID = toolCallID
+	// HLD-021: the real shim blocks here until a human decides and returns
+	// the executor's output; the fake returns immediately with a stub result.
+	return `{"stdout":"ok","exit_code":0}`, nil
 }
 
 // TestCloudBash_ThreadsSessionID locks the HLD-019 regression: cloud_bash must

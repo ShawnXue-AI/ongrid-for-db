@@ -294,6 +294,59 @@ export default function ChatThreadPage() {
               ),
             );
           },
+          onApprovalPending: (a) => {
+            // HLD-021: cloud_bash is now blocking on a human decision. Drive
+            // the inline approve/reject card from this live frame by stamping
+            // a synthetic pending_approval result onto the tool call's
+            // existing streaming card (keyed by tool_call_id) — the same blob
+            // shape the card detection already understands, so PendingApproval
+            // Card renders in place. When the user approves, the blocked tool
+            // returns the real output and the subsequent tool_end frame
+            // replaces this blob with the actual result.
+            const blob = {
+              status: 'pending_approval',
+              approval_id: a.approval_id,
+              command: a.command,
+              credentials: a.credentials,
+            };
+            const args = a.command ? { command: a.command } : undefined;
+            setMessages((prev) => {
+              const targetId = a.tool_call_id ? toolCardId(a.tool_call_id) : '';
+              const idx = targetId ? prev.findIndex((m) => m.id === targetId) : -1;
+              if (idx >= 0) {
+                const next = [...prev];
+                const m = next[idx];
+                next[idx] = {
+                  ...m,
+                  tool_call: {
+                    id: a.tool_call_id,
+                    name: m.tool_call?.name ?? 'cloud_bash',
+                    status: 'pending',
+                    arguments: m.tool_call?.arguments ?? args,
+                    result: blob,
+                  },
+                };
+                return next;
+              }
+              // Fallback (no tool card to merge into, e.g. legacy kernel with
+              // no tool_call_id): append a standalone approval card.
+              return [
+                ...prev,
+                {
+                  id: `approval-${a.approval_id}`,
+                  role: 'tool',
+                  kind: 'tool_card',
+                  tool_call: {
+                    id: a.tool_call_id,
+                    name: 'cloud_bash',
+                    status: 'pending',
+                    arguments: args,
+                    result: blob,
+                  },
+                },
+              ];
+            });
+          },
           onDone: () => {
             invalidateChatSessions();
           },
