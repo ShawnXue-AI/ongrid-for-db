@@ -3,10 +3,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Cloud, Cpu, Wrench, RefreshCw, Play, Search, Puzzle } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { listSkills, localizedSkill, type SkillClass, type SkillScope, type SkillSummary } from '@/api/skills';
-import { createSession } from '@/api/chat';
+import { createSession, listModels, type LLMProvider } from '@/api/chat';
 import { ApiError } from '@/api/client';
 import { Modal } from '@/components/Modal';
-import { ChatInput } from '@/components/ChatInput';
+import { ChatInput, type ModelSelection } from '@/components/ChatInput';
+import { useModelSelection } from '@/store/modelSelection';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
 import { PageHeader } from '@/components/ui';
@@ -77,6 +78,31 @@ function InstallChatBar() {
   const navigate = useNavigate();
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // Same model wiring as the Home composer: load the catalog default and share
+  // the global selection store, so the picker shows the default model (not
+  // "未配置模型") and a change here is reflected on Home too.
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
+  const storeModel = useModelSelection((s) => s.selected);
+  const setStoreModel = useModelSelection((s) => s.setSelected);
+  const [catalogDefault, setCatalogDefault] = useState<ModelSelection | null>(null);
+  const selectedModel = storeModel ?? catalogDefault;
+  useEffect(() => {
+    let cancelled = false;
+    listModels()
+      .then((cat) => {
+        if (cancelled) return;
+        setProviders(cat.providers ?? []);
+        if (cat.default && cat.default.provider) {
+          setCatalogDefault({ provider: cat.default.provider, model: cat.default.model || '' });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const start = async (text: string) => {
     const v = text.trim();
     if (!v || busy) return;
@@ -107,6 +133,9 @@ function InstallChatBar() {
           'Paste a skill source (git / tarball / skills.sh), or describe a capability — let the assistant install it…',
         )}
         disabled={busy}
+        providers={providers}
+        selectedModel={selectedModel}
+        onModelChange={(sel) => setStoreModel(sel)}
       />
     </div>
   );
