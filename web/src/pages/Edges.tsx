@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Plus, RotateCw, Trash2, MoreVertical, Copy, Check, ExternalLink, TerminalSquare, Search } from 'lucide-react';
+import { Plus, RotateCw, Trash2, MoreVertical, Copy, Check, ExternalLink, TerminalSquare } from 'lucide-react';
 import { StatusPill } from '@/components/StatusPill';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
@@ -30,15 +30,15 @@ import { notifyDevicesChanged } from '@/lib/events';
 import { useI18n } from '@/i18n/locale';
 
 // Sidebar headers that map to ?roles= filters. Empty string = "全部"; the
-// sentinel "unknown" lights up the 未分�?sub-item. Pulled out so the page
+// sentinel "unknown" lights up the 未分类 sub-item. Pulled out so the page
 // title and the role editor share a single source of truth.
 // Each entry is a [zh, en] pair consumed via tr() below.
 const ROLE_FILTER_TITLES: Record<string, [string, string]> = {
   '': ['全部设备', 'All devices'],
-  server: ['服务�?, 'Servers'],
+  server: ['服务器', 'Servers'],
   storage: ['存储', 'Storage'],
   network: ['网络设备', 'Network devices'],
-  unknown: ['未分类设�?, 'Uncategorized devices'],
+  unknown: ['未分类设备', 'Uncategorized devices'],
 };
 
 export default function EdgesPage() {
@@ -61,7 +61,7 @@ export default function EdgesPage() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // managerVersion drives the Agent column's drift chip �?fetched once
+  // managerVersion drives the Agent column's drift chip — fetched once
   // on mount; failures degrade silently to "no chip" rather than red
   // because version mismatch isn't operationally critical.
   const [managerVersion, setManagerVersion] = useState<string>('');
@@ -77,10 +77,9 @@ export default function EdgesPage() {
     secretKey: string;
   } | null>(null);
   const [rolesEditTarget, setRolesEditTarget] = useState<Edge | null>(null);
-  const [query, setQuery] = useState('');
   const [upgradeTarget, setUpgradeTarget] = useState<Edge | null>(null);
   // per-row "整包升级" busy state + last-result toast. We don't
-  // open a modal �?the action is single-click and the result lands in
+  // open a modal — the action is single-click and the result lands in
   // the existing toast pipeline.
   const [pkgUpgradingId, setPkgUpgradingId] = useState<number | null>(null);
   const [pkgUpgradeToast, setPkgUpgradeToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -91,8 +90,8 @@ export default function EdgesPage() {
       // Backend currently doesn't filter by roles (the param is sent
       // for forward-compat); the post-split device.roles lives on
       // each row in `Roles []string`. Filter client-side so the
-      // 服务�?/ 存储 / 网络 sub-views show only matching devices,
-      // and 未分�?lands in its own bucket �?never mixed in.
+      // 服务器 / 存储 / 网络 sub-views show only matching devices,
+      // and 未分类 lands in its own bucket — never mixed in.
       let items = r.items ?? [];
       if (rolesFilter === 'unknown') {
         items = items.filter((e) => !e.roles || e.roles.length === 0);
@@ -115,23 +114,10 @@ export default function EdgesPage() {
   }, [refresh]);
   usePoll(refresh, 10_000);
 
-  const filteredEdges = useMemo(() => {
-    if (!query.trim()) return edges;
-    const q = query.trim().toLowerCase();
-    return edges.filter((e) => {
-      const hostname = extractHostname(e.host_info) ?? '';
-      return (
-        (e.name || '').toLowerCase().includes(q) ||
-        hostname.toLowerCase().includes(q) ||
-        e.access_key_id.toLowerCase().includes(q)
-      );
-    });
-  }, [edges, query]);
-
   async function onCreate(name: string) {
     const created: CreateEdgeResponse = await createEdge({ name });
     setSecretReveal({
-      title: tr('已创建设�?, 'Device created'),
+      title: tr('已创建设备', 'Device created'),
       accessKey: created.access_key_id,
       secretKey: created.secret_key,
     });
@@ -139,11 +125,11 @@ export default function EdgesPage() {
   }
 
   async function onRotate(id: number, name: string, accessKey: string) {
-    if (!confirm(tr(`确定要轮�?${name} 的密钥？旧密钥将立即失效。`, `Rotate ${name}'s secret? The old key takes effect immediately becomes invalid.`))) return;
+    if (!confirm(tr(`确定要轮换 ${name} 的密钥？旧密钥将立即失效。`, `Rotate ${name}'s secret? The old key takes effect immediately becomes invalid.`))) return;
     try {
       const r: RotateSecretResponse = await rotateSecret(id);
       setSecretReveal({
-        title: tr(`已轮�?${name} 的密钥`, `Rotated ${name}'s secret`),
+        title: tr(`已轮换 ${name} 的密钥`, `Rotated ${name}'s secret`),
         accessKey,
         secretKey: r.secret_key,
       });
@@ -153,7 +139,7 @@ export default function EdgesPage() {
   }
 
   async function onDelete(id: number, name: string) {
-    if (!confirm(tr(`确定要删�?${name}？此操作不可恢复。`, `Delete ${name}? This cannot be undone.`))) return;
+    if (!confirm(tr(`确定要删除 ${name}？此操作不可恢复。`, `Delete ${name}? This cannot be undone.`))) return;
     try {
       await deleteEdge(id);
       void refresh();
@@ -180,11 +166,11 @@ export default function EdgesPage() {
         kind: ok ? 'ok' : 'err',
         text: ok
           ? tr(
-              `${e.name} �?${resp.version} �?stage ${resp.manifest_files} 个文件，重启 swap 中`,
-              `${e.name} �?${resp.version} staged ${resp.manifest_files} files; restarting to apply`,
+              `${e.name} → ${resp.version} 已 stage ${resp.manifest_files} 个文件，重启 swap 中`,
+              `${e.name} → ${resp.version} staged ${resp.manifest_files} files; restarting to apply`,
             )
           : tr(
-              `${e.name} stage 成功�?apply 失败�?{resp.apply_error ?? '未知'}`,
+              `${e.name} stage 成功但 apply 失败：${resp.apply_error ?? '未知'}`,
               `${e.name} staged OK but apply failed: ${resp.apply_error ?? 'unknown'}`,
             ),
       });
@@ -206,21 +192,10 @@ export default function EdgesPage() {
           <div>
             <h1 className="text-base font-semibold text-zinc-100">{headerTitle}</h1>
             <p className="mt-0.5 text-xs text-zinc-500">
-              {tr(`${filteredEdges.length} 台设�?· �?10 秒自动刷新`, `${filteredEdges.length} device(s) · auto-refresh every 10s`)}
+              {tr(`${edges.length} 台设备 · 每 10 秒自动刷新`, `${edges.length} device(s) · auto-refresh every 10s`)}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <label className="relative hidden w-48 sm:block">
-              <span className="sr-only">{tr('搜索', 'Search')}</span>
-              <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={tr('搜索名称 / 主机�?, 'Search name / hostname')}
-                className="w-full rounded-md border border-zinc-800 bg-zinc-950/40 py-1.5 pl-8 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-700 focus:outline-none"
-              />
-            </label>
             <Link
               to="/edges/shell-sessions"
               className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
@@ -255,11 +230,11 @@ export default function EdgesPage() {
                 <tr>
                   <th className="px-4 py-2.5 text-left">ID</th>
                   <th className="px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
-                  <th className="px-4 py-2.5 text-left">{tr('主机�?, 'Hostname')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('主机名', 'Hostname')}</th>
                   <th className="px-4 py-2.5 text-left">IP</th>
                   <th className="px-4 py-2.5 text-left">{tr('角色', 'Roles')}</th>
-                  <th className="px-4 py-2.5 text-left">{tr('状�?, 'Status')}</th>
-                  <th className="px-4 py-2.5 text-left">{tr('最后心�?, 'Last heartbeat')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('状态', 'Status')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('最后心跳', 'Last heartbeat')}</th>
                   <th className="px-4 py-2.5 text-left">Access Key</th>
                   <th className="px-4 py-2.5 text-left">Agent</th>
                   <th className="px-4 py-2.5 text-right">{tr('操作', 'Actions')}</th>
@@ -269,34 +244,32 @@ export default function EdgesPage() {
                 {loading && edges.length === 0 ? (
                   <tr>
                     <td colSpan={10} className="px-4 py-10 text-center text-zinc-500">
-                      {tr('加载中�?, 'Loading�?)}
+                      {tr('加载中…', 'Loading…')}
                     </td>
                   </tr>
-                ) : filteredEdges.length === 0 ? (
+                ) : edges.length === 0 ? (
                   <tr>
-                        <td colSpan={10} className="px-4 py-10 text-center text-zinc-500">
-                          {edges.length > 0
-                            ? tr('没有匹配的设备，换个关键字试试', 'No matching devices, try a different keyword')
-                            : rolesFilter
-                              ? tr(
-                                  `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
-                                  `No ${ROLE_FILTER_TITLES[rolesFilter]?.[1] ?? rolesFilter} devices. Open a device detail page to assign roles.`,
-                                )
-                              : tr(
-                                  '暂无设备。点击右上角"新建"创建一个。',
-                                  'No devices yet. Click "New" in the top right to create one.',
-                                )}
-                        </td>
+                    <td colSpan={10} className="px-4 py-10 text-center text-zinc-500">
+                      {rolesFilter
+                        ? tr(
+                            `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
+                            `No ${ROLE_FILTER_TITLES[rolesFilter]?.[1] ?? rolesFilter} devices. Open a device detail page to assign roles.`,
+                          )
+                        : tr(
+                            '暂无设备。点击右上角"新建"创建一个。',
+                            'No devices yet. Click "New" in the top right to create one.',
+                          )}
+                    </td>
                   </tr>
                 ) : (
-                  filteredEdges.map((e) => (
+                  edges.map((e) => (
                     <tr
                       key={e.id}
                       className="cursor-pointer transition-colors hover:bg-zinc-900/40"
                       onClick={() => navigate(`/edges/${encodeURIComponent(e.id)}`)}
                     >
                       {/* Identity columns are pinned `whitespace-nowrap`
-                          �?when the table is squeezed (sidebar + many
+                          — when the table is squeezed (sidebar + many
                           columns) we'd rather let the action column
                           wrap than have a name break across lines.
                           Heartbeat / access-key / agent are short and
@@ -306,14 +279,14 @@ export default function EdgesPage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-100">
                         {e.name || (
-                          <span className="italic text-zinc-500">{tr('（待主机上线�?, '(waiting for host)')}</span>
+                          <span className="italic text-zinc-500">{tr('（待主机上线）', '(waiting for host)')}</span>
                         )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
-                        {extractHostname(e.host_info) ?? '�?}
+                        {extractHostname(e.host_info) ?? '—'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
-                        {extractIP(e.host_info) ?? '�?}
+                        {extractIP(e.host_info) ?? '—'}
                       </td>
                       <td
                         className="cursor-pointer whitespace-nowrap px-4 py-2.5"
@@ -329,11 +302,11 @@ export default function EdgesPage() {
                         <StatusPill status={e.status} />
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
-                        {e.last_seen_at ? relativeTime(e.last_seen_at) : '�?}
+                        {e.last_seen_at ? relativeTime(e.last_seen_at) : '—'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
                         <span className="rounded bg-zinc-800/60 px-1.5 py-0.5">
-                          {e.access_key_id.slice(0, 8)}�?
+                          {e.access_key_id.slice(0, 8)}…
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
@@ -346,8 +319,8 @@ export default function EdgesPage() {
                         <button
                           type="button"
                           onClick={() => void openServerChart(e)}
-                          title={tr(`�?Grafana 查看 ${e.name} 图表`, `View ${e.name} chart in Grafana`)}
-                          aria-label={tr(`�?Grafana 查看 ${e.name} 图表`, `View ${e.name} chart in Grafana`)}
+                          title={tr(`在 Grafana 查看 ${e.name} 图表`, `View ${e.name} chart in Grafana`)}
+                          aria-label={tr(`在 Grafana 查看 ${e.name} 图表`, `View ${e.name} chart in Grafana`)}
                           className="mr-1 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
                         >
                           <ExternalLink size={14} />
@@ -402,7 +375,7 @@ export default function EdgesPage() {
           onClose={() => setUpgradeTarget(null)}
           onTriggered={() => {
             setUpgradeTarget(null);
-            // Don't immediately refresh �?the edge needs ~30s to come
+            // Don't immediately refresh — the edge needs ~30s to come
             // back online with the new version. Operator can refresh
             // manually; auto-refresh polling will pick it up too.
           }}
@@ -438,9 +411,9 @@ export default function EdgesPage() {
 
 // AgentVersionCell shows the edge's reported agent_version + a drift
 // pill comparing it to the manager. Three states:
-//   - no agent_version reported �?�?"�? (pre-fix binary)
-//   - matches manager (or unknown manager) �?�?"vX.Y.Z" no pill
-//   - differs from manager �?amber "vX.Y.Z · 落后"
+//   - no agent_version reported → 灰 "—" (pre-fix binary)
+//   - matches manager (or unknown manager) → 灰 "vX.Y.Z" no pill
+//   - differs from manager → amber "vX.Y.Z · 落后"
 // We don't try semver-compare ("0.7.40" vs "0.7.43"); a string mismatch
 // is enough signal that an operator should look. Strict comparison also
 // avoids false greens during pre-release tagging weirdness.
@@ -453,7 +426,7 @@ function AgentVersionCell({
 }) {
   const { tr } = useI18n();
   if (!agentVersion) {
-    return <span className="text-zinc-600">�?/span>;
+    return <span className="text-zinc-600">—</span>;
   }
   const drifted = managerVersion && agentVersion !== managerVersion;
   return (
@@ -462,7 +435,7 @@ function AgentVersionCell({
       {drifted && (
         <span
           className="rounded border border-amber-700/50 bg-amber-900/20 px-1.5 py-0.5 text-[10px] text-amber-300"
-          title={tr(`manager 版本 ${managerVersion} �?�?edge �?manager 不同步`, `manager version ${managerVersion} �?this edge is out of sync with the manager`)}
+          title={tr(`manager 版本 ${managerVersion} — 该 edge 与 manager 不同步`, `manager version ${managerVersion} — this edge is out of sync with the manager`)}
         >
           {tr('落后', 'outdated')}
         </span>
@@ -471,11 +444,11 @@ function AgentVersionCell({
   );
 }
 
-// UpgradeModal �?operator confirms the upgrade target URL + sha256 and
+// UpgradeModal — operator confirms the upgrade target URL + sha256 and
 // the manager dispatches an agent_upgrade RPC to the edge. The actual
 // swap happens on the edge's next process restart (systemd
 // ExecStartPre swap script). Form is intentionally explicit (URL +
-// sha256 typed in by hand) for v1 �?a future revision should let
+// sha256 typed in by hand) for v1 — a future revision should let
 // the operator pick from a manager-side artifact registry instead.
 function UpgradeModal({
   edge,
@@ -501,7 +474,7 @@ function UpgradeModal({
   const [err, setErr] = useState<string | null>(null);
   const submit = async () => {
     if (!url.trim() || sha256.trim().length !== 64) {
-      setErr(tr('需�?URL + 64 位小�?sha256', 'URL + 64-char lowercase sha256 required'));
+      setErr(tr('需要 URL + 64 位小写 sha256', 'URL + 64-char lowercase sha256 required'));
       return;
     }
     setSubmitting(true);
@@ -521,7 +494,7 @@ function UpgradeModal({
         <div>
           <div className="text-zinc-500">{tr('当前版本', 'Current version')}</div>
           <div className="font-mono">
-            {edge.agent_version ? edge.agent_version : tr('�?未上�?, '�?not reported')}
+            {edge.agent_version ? edge.agent_version : tr('— 未上报', '— not reported')}
             {managerVersion && (
               <span className="ml-2 text-zinc-500">/ manager {managerVersion}</span>
             )}
@@ -537,7 +510,7 @@ function UpgradeModal({
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-zinc-500">{tr('SHA256�?4 位小�?hex�?, 'SHA256 (64-char lowercase hex)')}</span>
+          <span className="mb-1 block text-zinc-500">{tr('SHA256（64 位小写 hex）', 'SHA256 (64-char lowercase hex)')}</span>
           <input
             type="text"
             value={sha256}
@@ -548,9 +521,9 @@ function UpgradeModal({
         </label>
         <p className="text-[11px] text-zinc-500">
           {tr(
-            'edge 会下载、校�?sha256，原�?stage 后干净退出；systemd ExecStartPre 在重启时把新二进�?mv �?',
+            'edge 会下载、校验 sha256，原子 stage 后干净退出；systemd ExecStartPre 在重启时把新二进制 mv 到 ',
             'edge downloads, verifies sha256, stages atomically and exits cleanly; on restart systemd ExecStartPre mv\'s the new binary to ',
-          )}<code className="font-mono">/usr/local/bin/ongrid-edge</code>{tr('。失败时旧版本保持不变�?, '. On failure the old version is left in place.')}
+          )}<code className="font-mono">/usr/local/bin/ongrid-edge</code>{tr('。失败时旧版本保持不变。', '. On failure the old version is left in place.')}
         </p>
         {err && (
           <div className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-red-300">
@@ -571,7 +544,7 @@ function UpgradeModal({
             onClick={submit}
             className="rounded-md bg-accent px-3 py-1.5 text-accent-fg hover:bg-accent/90 disabled:opacity-50"
           >
-            {submitting ? tr('触发中�?, 'Triggering�?) : tr('触发升级', 'Trigger upgrade')}
+            {submitting ? tr('触发中…', 'Triggering…') : tr('触发升级', 'Trigger upgrade')}
           </button>
         </div>
       </div>
@@ -580,11 +553,11 @@ function UpgradeModal({
 }
 
 // RoleChips renders the roles bit set as small color-coded chips. Empty
-// list shows a "未分�? placeholder. The wrapping <td> is what's clickable;
+// list shows a "未分类" placeholder. The wrapping <td> is what's clickable;
 // these chips are non-interactive on their own.
 function RoleChips({ roles }: { roles: EdgeRole[] }) {
   const { tr } = useI18n();
-  // The wrapping <td> is what's clickable �?these chips are visual
+  // The wrapping <td> is what's clickable — these chips are visual
   // indicators only. The dashed "+" chip exists to ADVERTISE the
   // affordance: without it operators saw a row of solid chips and
   // didn't realise they could click to manage roles (user feedback
@@ -630,9 +603,9 @@ const ROLE_CHIP_CLASS: Record<EdgeRole, string> = {
 };
 
 // RolesEditorModal lets an admin toggle the three role bits for one edge.
-// Keep "全�? / "全清" out of MVP �?three checkboxes is already trivial UX.
+// Keep "全选" / "全清" out of MVP — three checkboxes is already trivial UX.
 // Saving sends the full roles array (PATCH .../roles {roles:[...]}); empty
-// array means "未分�?. Backend rejects unknown names so the UI doesn't
+// array means "未分类". Backend rejects unknown names so the UI doesn't
 // have to client-side validate.
 function RolesEditorModal({
   edge,
@@ -666,8 +639,8 @@ function RolesEditorModal({
       if (edge.device_id == null) {
         throw new Error(
           tr(
-            '此设备尚未上�?host 信息，请�?agent 上线后再分配角色�?,
-            'This edge has not reported host info yet �?wait for it to come online before assigning roles.',
+            '此设备尚未上报 host 信息，请等 agent 上线后再分配角色。',
+            'This edge has not reported host info yet — wait for it to come online before assigning roles.',
           ),
         );
       }
@@ -708,7 +681,7 @@ function RolesEditorModal({
             disabled={submitting}
             className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white disabled:opacity-50"
           >
-            {submitting ? tr('保存中�?, 'Saving�?) : tr('保存', 'Save')}
+            {submitting ? tr('保存中…', 'Saving…') : tr('保存', 'Save')}
           </button>
         </>
       }
@@ -716,7 +689,7 @@ function RolesEditorModal({
       <div className="space-y-2">
         <p className="text-xs text-zinc-500">
           {tr(
-            '一台设备可同时承担多个角色（例：超融合一体机 = 服务�?+ 存储）。不勾�?= 未分类�?,
+            '一台设备可同时承担多个角色（例：超融合一体机 = 服务器 + 存储）。不勾选 = 未分类。',
             'A device can hold multiple roles (e.g. a hyper-converged box = server + storage). Leave empty for uncategorized.',
           )}
         </p>
@@ -812,11 +785,11 @@ function extractIPFromObj(obj: Record<string, unknown>): string | null {
 }
 
 // ShellButton opens the WebSSH page for one device in a NEW tab. The
-// route key is device_id, not edge.id �?Prom labels and the backend
+// route key is device_id, not edge.id — Prom labels and the backend
 // WS handler both use device_id. Disabled when the edge is offline
 // or hasn't been linked to a Device row yet (device_id null).
 //
-// Why new tab: a shell session is its own thing �?closing the host
+// Why new tab: a shell session is its own thing — closing the host
 // page (Edges) would normally tear it down via beforeunload. Letting
 // it live in its own tab matches user mental model ("multiple shells
 // open at once") and lets them keep using the rest of the SPA without
@@ -827,9 +800,9 @@ function ShellButton({ edge, canMutate }: { edge: Edge; canMutate: boolean }) {
   const reason = !canMutate
     ? tr('只读账号不能进入终端', 'Viewer accounts cannot open the terminal')
     : !edge.device_id
-      ? tr('设备未上线（尚未注册 device 记录�?, 'Device offline (no device record registered yet)')
+      ? tr('设备未上线（尚未注册 device 记录）', 'Device offline (no device record registered yet)')
       : edge.status !== 'online'
-        ? tr('设备未上�?, 'Device offline')
+        ? tr('设备未上线', 'Device offline')
         : '';
   const href = edge.device_id
     ? `/devices/${encodeURIComponent(String(edge.device_id))}/shell`
@@ -851,7 +824,7 @@ function ShellButton({ edge, canMutate }: { edge: Edge; canMutate: boolean }) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      title={tr(`打开 ${edge.name} 终端 (WebSSH) �?在新标签页`, `Open ${edge.name} terminal (WebSSH) �?new tab`)}
+      title={tr(`打开 ${edge.name} 终端 (WebSSH) — 在新标签页`, `Open ${edge.name} terminal (WebSSH) — new tab`)}
       aria-label={tr(`打开 ${edge.name} 终端，新标签页`, `Open ${edge.name} terminal in a new tab`)}
       className="mr-1 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
     >
@@ -923,7 +896,7 @@ function RowMenu({
             }}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
           >
-            <ExternalLink size={13} /> {upgradePackageBusy ? tr('升级中�?, 'Upgrading�?) : tr('升级整包（agent + 插件�?, 'Upgrade package (agent + plugins)')}
+            <ExternalLink size={13} /> {upgradePackageBusy ? tr('升级中…', 'Upgrading…') : tr('升级整包（agent + 插件）', 'Upgrade package (agent + plugins)')}
           </button>
           {/* Legacy custom-URL upgrade. Kept as fallback for
               cross-version downgrades / pinned URLs the resolver
@@ -936,7 +909,7 @@ function RowMenu({
             }}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800"
           >
-            <ExternalLink size={13} /> {tr('自定义升�?(URL + sha)', 'Custom upgrade (URL + sha)')}
+            <ExternalLink size={13} /> {tr('自定义升级 (URL + sha)', 'Custom upgrade (URL + sha)')}
           </button>
           <button
             type="button"
@@ -1037,7 +1010,7 @@ function CreateEdgeModal({
             disabled={pending}
             className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {pending ? tr('创建中�?, 'Creating�?) : tr('创建', 'Create')}
+            {pending ? tr('创建中…', 'Creating…') : tr('创建', 'Create')}
           </button>
         </>
       }
@@ -1058,8 +1031,8 @@ function CreateEdgeModal({
       />
       <p className="mt-2 text-[11px] text-zinc-500">
         {tr(
-          '名称可留空。设备上线后会自动以上报的主机名填入。创建后将一次性显�?secret_key，关闭弹窗后无法再次查看�?,
-          'Name may be left blank �?it auto-fills with the reported hostname on first heartbeat. secret_key is shown once after creation and cannot be retrieved again.',
+          '名称可留空。设备上线后会自动以上报的主机名填入。创建后将一次性显示 secret_key，关闭弹窗后无法再次查看。',
+          'Name may be left blank — it auto-fills with the reported hostname on first heartbeat. secret_key is shown once after creation and cannot be retrieved again.',
         )}
       </p>
       {err && (
@@ -1100,7 +1073,7 @@ function SecretRevealModal({
       }
     >
       <p className="mb-3 text-xs text-amber-300/90">
-        {tr('以下安装命令包含 secret_key，仅显示一次。请立即复制保存到目标主机�?, 'The install command below carries the secret_key and is shown only once. Copy it to the target host now.')}
+        {tr('以下安装命令包含 secret_key，仅显示一次。请立即复制保存到目标主机。', 'The install command below carries the secret_key and is shown only once. Copy it to the target host now.')}
       </p>
       <InstallCommandRow accessKey={data.accessKey} secretKey={data.secretKey} />
     </Modal>
@@ -1129,7 +1102,7 @@ function InstallCommandRow({ accessKey, secretKey }: { accessKey: string; secret
     <div className="mt-4">
       <div className="mb-1 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-wider text-zinc-500">
-          {tr('在目标主机上一键安�?, 'One-line install on the target host')}
+          {tr('在目标主机上一键安装', 'One-line install on the target host')}
         </div>
         <button
           type="button"
@@ -1153,17 +1126,16 @@ function InstallCommandRow({ accessKey, secretKey }: { accessKey: string; secret
           )}
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
-          {copied ? tr('已复�?, 'Copied') : tr('复制单行', 'Copy one-liner')}
+          {copied ? tr('已复制', 'Copied') : tr('复制单行', 'Copy one-liner')}
         </button>
       </div>
       <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-200">
         {display}
       </pre>
       <p className="mt-1.5 text-[11px] text-zinc-500">
-        {tr('自签证书：浏览器警告 + curl ', 'Self-signed cert: browser warning + curl ')}<code className="rounded bg-zinc-800 px-1">-k</code>{tr(' 已忽略校验。目标主机需 root（脚本会自动 sudo 重试）；支持 linux amd64 / arm64�?, ' skips verification. The target host needs root (the script auto-retries with sudo); linux amd64 / arm64 are supported.')}
+        {tr('自签证书：浏览器警告 + curl ', 'Self-signed cert: browser warning + curl ')}<code className="rounded bg-zinc-800 px-1">-k</code>{tr(' 已忽略校验。目标主机需 root（脚本会自动 sudo 重试）；支持 linux amd64 / arm64。', ' skips verification. The target host needs root (the script auto-retries with sudo); linux amd64 / arm64 are supported.')}
       </p>
     </div>
   );
 }
-
 
