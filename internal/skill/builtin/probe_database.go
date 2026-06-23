@@ -7,6 +7,7 @@ package builtin
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,9 +31,8 @@ func init() { skill.Register(&ProbeDatabase{}) }
 // For Redis it speaks the RESP protocol directly — PING for liveness,
 // INFO server for version detection.  No external Redis driver is needed.
 //
-// For MongoDB it performs a TCP dial as a basic connectivity check; full
-// wire-protocol version detection requires the mongo-go-driver BSON layer
-// and is left as a future enhancement.
+// For MongoDB it performs a wire-protocol OP_QUERY with {isMaster: 1} so
+// the server returns its version string — no external BSON library needed.
 type ProbeDatabase struct{}
 
 // Metadata returns the framework-visible spec for db_ping.
@@ -170,17 +170,28 @@ func pingRedis(ctx context.Context, p dbPingParams) (json.RawMessage, error) {
 	_ = conn.SetDeadline(time.Now().Add(remainingTimeout(ctx, p.TimeoutSecs)))
 
 	// Authenticate when password is provided.
+	// Redis 6+ supports AUTH <user> <password> (ACL); Redis < 6.0 only
+	// accepts AUTH <password>.  When user is explicitly provided we try
+	// the ACL form first and fall back to password-only on "wrong number
+	// of arguments" (Redis < 6.0).  When user is empty we send password-
+	// only, which works on every version.
 	if p.Password != "" {
-		user := p.User
-		if user == "" {
-			user = "default" // Redis 6+ ACL default user
+		var authResp string
+		var authErr error
+		if p.User != "" {
+			authResp, authErr = redisRoundTrip(conn, "AUTH", p.User, p.Password)
+			if authErr == nil && strings.HasPrefix(authResp, "-") && strings.Contains(authResp, "wrong number of arguments") {
+				// Redis < 6.0 fallback: AUTH only takes <password>
+				authResp, authErr = redisRoundTrip(conn, "AUTH", p.Password)
+			}
+		} else {
+			authResp, authErr = redisRoundTrip(conn, "AUTH", p.Password)
 		}
-		resp, err := redisRoundTrip(conn, "AUTH", user, p.Password)
-		if err != nil {
-			return marshalResult("offline", "", fmt.Sprintf("auth error: %v", err), latency)
+		if authErr != nil {
+			return marshalResult("offline", "", fmt.Sprintf("auth error: %v", authErr), latency)
 		}
-		if strings.HasPrefix(resp, "-") {
-			return marshalResult("offline", "", fmt.Sprintf("auth rejected: %s", resp), latency)
+		if strings.HasPrefix(authResp, "-") {
+			return marshalResult("offline", "", fmt.Sprintf("auth rejected: %s", authResp), latency)
 		}
 	}
 
@@ -196,7 +207,6 @@ func pingRedis(ctx context.Context, p dbPingParams) (json.RawMessage, error) {
 	// INFO server — version detection.
 	infoResp, err := redisRoundTrip(conn, "INFO", "server")
 	if err != nil {
-		// PING succeeded but INFO failed — still online, version unknown.
 		return marshalResult("online", "detected", "", latency)
 	}
 	version := parseRedisVersion(infoResp)
@@ -280,11 +290,16 @@ func parseRedisVersion(info string) string {
 	return "detected"
 }
 
-// --- MongoDB probe (TCP-level connectivity check) ---
+// --- MongoDB probe (wire-protocol OP_QUERY, no external BSON library) ---
 //
-// Full wire-protocol probe (OP_MSG with {hello:1}) requires BSON
-// encoding which depends on the mongo-go-driver. For now we verify
-// the port is reachable; version will be "detected".
+// We send a minimal OP_QUERY to admin.$cmd with {isMaster: 1} and parse
+// the OP_REPLY response BSON to extract the server version string.  This
+// works on MongoDB 2.4+ through 7.x without any driver dependency.
+
+const (
+	mongoOpReply = 1
+	mongoOpQuery = 2004
+)
 
 func pingMongoDB(ctx context.Context, p dbPingParams) (json.RawMessage, error) {
 	addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
@@ -298,7 +313,191 @@ func pingMongoDB(ctx context.Context, p dbPingParams) (json.RawMessage, error) {
 	}
 	defer conn.Close()
 
+	_ = conn.SetDeadline(time.Now().Add(remainingTimeout(ctx, p.TimeoutSecs)))
+
+	// Build a minimal BSON document {isMaster: 1}.
+	// BSON: int32 docLen + elements + \x00
+	// element: type(1) + fieldNameCString + value
+	// For {isMaster: 1}: type=0x10(int32), name="isMaster\x00"(9), value=1(4), terminator=1
+	//   → 4 + 1 + 9 + 4 + 1 = 19 bytes
+	query := make([]byte, 19)
+	binary.LittleEndian.PutUint32(query[0:4], 19) // document length
+	query[4] = 0x10                                // type: int32
+	copy(query[5:], "isMaster\x00")                // field name (C string)
+	binary.LittleEndian.PutUint32(query[14:], 1)   // value: 1
+	query[18] = 0                                  // document terminator
+
+	// Build OP_QUERY wire message.
+	// Header: msgLength(4) + requestID(4) + responseTo(4) + opCode(4) = 16
+	// Body:   flags(4) + fullCollectionName(CString) + numberToSkip(4) + numberToReturn(4) + query(BSON)
+	collName := "admin.$cmd\x00" // 12 bytes
+	bodyLen := 4 + len(collName) + 4 + 4 + len(query)
+	msgLen := 16 + bodyLen
+
+	msg := make([]byte, msgLen)
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(msgLen))  // messageLength
+	binary.LittleEndian.PutUint32(msg[4:8], 1)               // requestID
+	binary.LittleEndian.PutUint32(msg[8:12], 0)              // responseTo
+	binary.LittleEndian.PutUint32(msg[12:16], mongoOpQuery)  // opCode = 2004
+	binary.LittleEndian.PutUint32(msg[16:20], 0)             // flags
+	copy(msg[20:], collName)                                 // fullCollectionName
+	binary.LittleEndian.PutUint32(msg[32:36], 0)             // numberToSkip
+	binary.LittleEndian.PutUint32(msg[36:40], -1)            // numberToReturn (-1 = default)
+	copy(msg[40:], query)                                    // query BSON
+
+	if _, err := conn.Write(msg); err != nil {
+		return marshalResult("offline", "", fmt.Sprintf("write query: %v", err), latency)
+	}
+
+	// Read response header (16 bytes: msgLen + requestID + responseTo + opCode).
+	header := make([]byte, 16)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return marshalResult("offline", "", fmt.Sprintf("read header: %v", err), latency)
+	}
+	respLen := binary.LittleEndian.Uint32(header[0:4])
+	if respLen < 16 {
+		return marshalResult("offline", "", "bad response length", latency)
+	}
+
+	// Read OP_REPLY body.
+	// Body: flags(4) + cursorID(8) + startingFrom(4) + numberReturned(4) + documents
+	body := make([]byte, respLen-16)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return marshalResult("offline", "", fmt.Sprintf("read body: %v", err), latency)
+	}
+	if len(body) < 20 {
+		return marshalResult("online", "detected", "", latency)
+	}
+
+	numReturned := binary.LittleEndian.Uint32(body[16:20])
+	if numReturned == 0 {
+		return marshalResult("online", "detected", "", latency)
+	}
+
+	// Parse the first BSON document (starts at body[20:]) for the version field.
+	version := parseBSONStringField(body[20:], "version")
+	if version != "" {
+		return marshalResult("online", version, "", latency)
+	}
 	return marshalResult("online", "detected", "", latency)
+}
+
+// parseBSONStringField walks a BSON document looking for a string-typed field
+// and returns its value.  It handles enough element types to skip past
+// non-matching fields reliably: double, string, document, array, binary,
+// bool, datetime, null, regex, JS code, symbol, int32, int64, timestamp,
+// and Decimal128.
+func parseBSONStringField(doc []byte, field string) string {
+	if len(doc) < 4 {
+		return ""
+	}
+	offset := 4 // skip document length
+	for offset < len(doc) {
+		if doc[offset] == 0 {
+			break // end of document
+		}
+		elemType := doc[offset]
+		offset++
+
+		// Read field name (C string).
+		end := offset
+		for end < len(doc) && doc[end] != 0 {
+			end++
+		}
+		if end >= len(doc) {
+			break
+		}
+		name := string(doc[offset:end])
+		offset = end + 1 // skip NUL terminator
+
+		switch elemType {
+		case 0x02: // UTF-8 string
+			if name == field {
+				if offset+4 > len(doc) {
+					return ""
+				}
+				strLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				if strLen <= 0 || offset+4+strLen > len(doc) {
+					return ""
+				}
+				return string(doc[offset+4 : offset+4+strLen-1]) // drop trailing NUL
+			}
+			if offset+4 <= len(doc) {
+				strLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += 4 + strLen
+			} else {
+				return ""
+			}
+		case 0x01: // double
+			offset += 8
+		case 0x03, 0x04: // embedded document or array
+			if offset+4 <= len(doc) {
+				subLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += subLen
+			} else {
+				return ""
+			}
+		case 0x05: // binary
+			if offset+4 <= len(doc) {
+				binLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += 5 + binLen // length + subtype + data
+			} else {
+				return ""
+			}
+		case 0x06: // undefined — no value
+		case 0x07: // ObjectId — 12 bytes
+			offset += 12
+		case 0x08: // boolean
+			offset++
+		case 0x09: // datetime (int64)
+			offset += 8
+		case 0x0A: // null — no value
+		case 0x0B: // regex: two C strings
+			for offset < len(doc) && doc[offset] != 0 {
+				offset++
+			}
+			offset++
+			for offset < len(doc) && doc[offset] != 0 {
+				offset++
+			}
+			offset++
+		case 0x0C: // DBPointer: string + 12 bytes OID
+			if offset+4 <= len(doc) {
+				ptrLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += 4 + ptrLen + 12
+			} else {
+				return ""
+			}
+		case 0x0D: // JavaScript code
+			fallthrough
+		case 0x0E: // symbol
+			if offset+4 <= len(doc) {
+				strLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += 4 + strLen
+			} else {
+				return ""
+			}
+		case 0x0F: // code_w_s: int32 + string + document
+			if offset+4 <= len(doc) {
+				wsLen := int(binary.LittleEndian.Uint32(doc[offset : offset+4]))
+				offset += 4 + wsLen
+			} else {
+				return ""
+			}
+		case 0x10: // int32
+			offset += 4
+		case 0x11: // timestamp (int64)
+			offset += 8
+		case 0x12: // int64
+			offset += 8
+		case 0x13: // Decimal128 — 16 bytes
+			offset += 16
+		default:
+			// Unknown type — can't skip safely.
+			return ""
+		}
+	}
+	return ""
 }
 
 // --- helpers ---
