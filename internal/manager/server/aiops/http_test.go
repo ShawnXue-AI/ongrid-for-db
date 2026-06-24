@@ -65,6 +65,10 @@ func (f *fakeService) DeleteSession(_ context.Context, c svc.Caller, _ string) e
 	f.lastCaller = c
 	return f.closeErr
 }
+func (f *fakeService) StopSession(_ context.Context, c svc.Caller, _ string) (bool, error) {
+	f.lastCaller = c
+	return true, nil
+}
 func (f *fakeService) RenameSession(_ context.Context, c svc.Caller, _, _ string) error {
 	f.lastCaller = c
 	return f.closeErr

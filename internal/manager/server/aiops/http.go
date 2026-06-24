@@ -49,6 +49,7 @@ type AIOpsService interface {
 	PostMessageWithOpts(ctx context.Context, caller svc.Caller, sessionID string, content string, opts agent.RunOptions) (*agent.Reply, error)
 	PostMessageStream(ctx context.Context, caller svc.Caller, sessionID string, content string, emit agent.Emit) (*agent.Reply, error)
 	PostMessageStreamWithOpts(ctx context.Context, caller svc.Caller, sessionID string, content string, emit agent.Emit, opts agent.RunOptions) (*agent.Reply, error)
+	StopSession(ctx context.Context, caller svc.Caller, sessionID string) (bool, error)
 	UsageToday(ctx context.Context) (*biz.DailyUsage, error)
 }
 
@@ -131,6 +132,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/chat/sessions", h.listSessions)
 	r.Post("/v1/chat/sessions/{id}/messages", h.postMessage)
 	r.Post("/v1/chat/sessions/{id}/messages/stream", h.postMessageStream)
+	r.Post("/v1/chat/sessions/{id}/stop", h.stopSession)
 	r.Get("/v1/chat/sessions/{id}/messages", h.listMessages)
 	r.Delete("/v1/chat/sessions/{id}", h.closeSession)
 	r.Patch("/v1/chat/sessions/{id}", h.renameSession)
@@ -609,6 +611,28 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 // close path is still available via the service layer for callers that
 // want to preserve audit history, but the UI DELETE is the destructive
 // kind users expect.
+// stopSession backs POST /v1/chat/sessions/{id}/stop — interrupts the
+// session's in-flight turn (the SPA calls this on Esc). Idempotent: returns
+// {"stopped": false} when no turn was running.
+func (h *Handler) stopSession(w http.ResponseWriter, r *http.Request) {
+	caller, ok := callerFromCtx(r.Context())
+	if !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	id, err := parseID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	stopped, err := h.svc.StopSession(r.Context(), caller, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"stopped": stopped})
+}
+
 func (h *Handler) closeSession(w http.ResponseWriter, r *http.Request) {
 	caller, ok := callerFromCtx(r.Context())
 	if !ok {

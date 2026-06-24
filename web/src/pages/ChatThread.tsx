@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui';
 import {
   getMessages,
   listModels,
+  stopSession,
   streamMessage,
   type ChatMessage,
   type LLMProvider,
@@ -39,6 +40,9 @@ export default function ChatThreadPage() {
   const [loading, setLoading] = useState(true);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const sentInitialRef = useRef(false);
+  // abortRef holds the in-flight turn's AbortController so Esc can cancel the
+  // stream client-side (instant UI) alongside the server-side stop call.
+  const abortRef = useRef<AbortController | null>(null);
   // stickToBottomRef tracks whether new messages should auto-scroll the
   // viewport down. Default true (fresh thread starts at bottom); flips
   // to false when the user manually scrolls up to read older context,
@@ -218,6 +222,8 @@ export default function ChatThreadPage() {
     if (!sessionId || !content.trim()) return false;
     setError(null);
     setSubmitting(true);
+    const ac = new AbortController();
+    abortRef.current = ac;
     let expectedToolSeen = !opts.expectedTool;
     let expectedToolFailed = false;
 
@@ -379,9 +385,16 @@ export default function ChatThreadPage() {
           webSearchEnabled,
           locale,
         },
+        ac.signal,
       );
       return expectedToolSeen && !expectedToolFailed;
     } catch (err) {
+      // Esc / stop aborts the fetch — that's an intentional stop, not an
+      // error. Leave the partial conversation as-is (the server persisted it);
+      // the history poll reconciles the final state.
+      if (ac.signal.aborted || (err as Error).name === 'AbortError') {
+        return false;
+      }
       const msg = (err as Error).message || tr('请求失败', 'Request failed');
       setError(msg);
       setMessages((prev) => [
@@ -396,8 +409,24 @@ export default function ChatThreadPage() {
       return false;
     } finally {
       setSubmitting(false);
+      if (abortRef.current === ac) abortRef.current = null;
     }
   }
+
+  // Esc interrupts the in-flight turn. The turn is detached from the request
+  // ctx server-side (so a refresh doesn't kill it), so we must explicitly tell
+  // the server to stop (stopSession) AND abort the local stream for an instant
+  // UI. Only acts while a turn is running; ignored otherwise so Esc keeps its
+  // normal behavior (closing menus, blurring inputs).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || !submittingRef.current || !sessionId) return;
+      void stopSession(sessionId).catch(() => {});
+      abortRef.current?.abort();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sessionId]);
 
   function confirmConfigDraft(draft: ConfigDraftResult): Promise<boolean> {
     if (submitting) return Promise.resolve(false);
@@ -418,6 +447,9 @@ export default function ChatThreadPage() {
           <span className="inline-block h-1 w-1 animate-pulse-dot rounded-full bg-zinc-500" style={{ animationDelay: '0.4s' }} />
         </span>
         <span>{tr('正在分析…', 'Analyzing…')}</span>
+        <span className="text-zinc-700">·</span>
+        <kbd className="rounded border border-zinc-700 px-1 text-[10px] text-zinc-500">Esc</kbd>
+        <span className="text-zinc-600">{tr('停止', 'stop')}</span>
       </div>
     );
   }

@@ -94,6 +94,17 @@ export function renameSession(sessionId: string, title: string) {
   );
 }
 
+// stopSession interrupts the session's in-flight turn server-side (the SPA
+// calls this on Esc). Needed because the turn is detached from the request
+// ctx (so a refresh doesn't kill it), so closing the stream alone no longer
+// cancels it — this is the explicit stop signal.
+export function stopSession(sessionId: string | number) {
+  return request<{ stopped: boolean }>(
+    'POST',
+    `/chat/sessions/${encodeURIComponent(String(sessionId))}/stop`,
+  );
+}
+
 export function getMessages(sessionId: string | number) {
   return request<{ items: ChatMessage[]; total: number }>(
     'GET',
