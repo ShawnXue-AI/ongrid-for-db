@@ -346,11 +346,11 @@ function CatalogTab() {
             <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/30">
               <table className="w-full text-sm">
                 <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
-                  <tr>
+                  <tr className="whitespace-nowrap">
                     <th className="px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
                     <th className="px-4 py-2.5 text-left">{tr('运行位置', 'Runs on')}</th>
                     <th className="px-4 py-2.5 text-left">{tr('类别', 'Class')}</th>
-                    <th className="px-4 py-2.5 text-left">{tr('描述', 'Description')}</th>
+                    <th className="w-full px-4 py-2.5 text-left">{tr('描述', 'Description')}</th>
                     <th className="px-4 py-2.5 text-right">{tr('操作', 'Actions')}</th>
                   </tr>
                 </thead>
