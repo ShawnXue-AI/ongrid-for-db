@@ -1850,6 +1850,12 @@ func main() {
 		env["PIP_USER"] = "1"
 		env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
 		env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+		// Optional pip index mirror — tccli + deps from pypi.org can take many
+		// minutes from a China-based host; a mirror cuts it to seconds. Generic
+		// (empty default = pypi); the test env sets it to a Tsinghua mirror.
+		if idx := strings.TrimSpace(os.Getenv("ONGRID_PIP_INDEX_URL")); idx != "" {
+			env["PIP_INDEX_URL"] = idx
+		}
 		// Resolve the session's persistent workspace as cwd (HLD-019). Empty
 		// workdir → runner uses a transient temp dir (legacy behavior).
 		workdir, err := wsMgr.Session(p.SessionID)

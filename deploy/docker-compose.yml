@@ -98,6 +98,9 @@ services:
       ONGRID_EMBEDDING_BASE_URL: ${ONGRID_EMBEDDING_BASE_URL:-}
       ONGRID_EMBEDDING_API_KEY: ${ONGRID_EMBEDDING_API_KEY:-}
       ONGRID_EMBEDDING_CACHE_DIR: ${ONGRID_EMBEDDING_CACHE_DIR:-/var/lib/ongrid/embeddings}
+      # Optional pip index mirror for cloud_bash runtime tool installs (empty =
+      # pypi). Set to a regional mirror where pypi.org is slow.
+      ONGRID_PIP_INDEX_URL: ${ONGRID_PIP_INDEX_URL:-}
       ONNX_PATH: /usr/lib/libonnxruntime.so
       # Embedded Grafana first-boot integration. The manager uses the
       # dev-only admin creds below to create an ongrid Service Account +
