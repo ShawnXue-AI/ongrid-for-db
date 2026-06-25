@@ -820,8 +820,47 @@ export default function FlowEditorPage() {
                 className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-indigo-500"
               />
             </label>
+            {/* 工具介绍 — tool description (tool nodes only) */}
+            {selected.data.flowType === 'tool' && (
+              <>
+                <SectionDivider label={tr('工具介绍', 'Tool')} />
+                <ToolArgsForm
+                  section="desc"
+                  toolName={(selected.data.config.tool as string) || ''}
+                  args={{}}
+                  schema={tools.find((t) => t.name === selected.data.config.tool)}
+                  disabled
+                  onChange={() => {}}
+                />
+              </>
+            )}
+
+            {/* 可引用的上游数据 — what this node can pull from upstream */}
+            {!selected.data.flowType.startsWith('trigger.') && (
+              <>
+                <SectionDivider />
+                <ReferencedData config={selected.data.config} nodes={nodes} />
+                <UpstreamRefs
+                  selectedId={selected.id}
+                  nodes={nodes}
+                  edges={edges}
+                  runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
+                  nodeSpecs={nodeSpecs}
+                  onCopy={(ref) => {
+                    void navigator.clipboard?.writeText(ref);
+                    setCopied(ref);
+                    window.setTimeout(() => setCopied(''), 1500);
+                  }}
+                  copied={copied}
+                />
+              </>
+            )}
+
+            {/* 输入参数 — the node's own args / config form */}
+            <SectionDivider label={tr('输入参数', 'Inputs')} />
             {selected.data.flowType === 'tool' ? (
               <ToolArgsForm
+                section="fields"
                 toolName={(selected.data.config.tool as string) || ''}
                 args={(selected.data.config.args as Record<string, unknown>) || {}}
                 schema={tools.find((t) => t.name === selected.data.config.tool)}
@@ -839,24 +878,34 @@ export default function FlowEditorPage() {
                 />
               ))
             )}
-            <ReferencedData config={selected.data.config} nodes={nodes} />
-            {!selected.data.flowType.startsWith('trigger.') && (
-              <UpstreamRefs
-                selectedId={selected.id}
-                nodes={nodes}
-                edges={edges}
-                runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
-                nodeSpecs={nodeSpecs}
-                onCopy={(ref) => {
-                  void navigator.clipboard?.writeText(ref);
-                  setCopied(ref);
-                  window.setTimeout(() => setCopied(''), 1500);
-                }}
-                copied={copied}
-              />
+
+            {/* 输出参数 — fields this node emits, for downstream refs */}
+            <SectionDivider label={tr('输出参数', 'Outputs')} />
+            <SelfOutputRefs
+              node={selected}
+              testOutput={testOut[selected.id]}
+              runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
+              nodeSpecs={nodeSpecs}
+              onCopy={(ref) => {
+                void navigator.clipboard?.writeText(ref);
+                setCopied(ref);
+                window.setTimeout(() => setCopied(''), 1500);
+              }}
+              copied={copied}
+            />
+            {(selected.data.flowType === 'agent' || selected.data.flowType === 'llm') && (
+              <div className="mt-2 rounded-md bg-zinc-900/60 p-2 text-[11px] leading-relaxed text-zinc-500">
+                {tr(
+                  '不声明输出 schema 时，answer 是自由文本——只能接 Agent / LLM / 通知节点；要接条件 / 工具，必须声明 schema 并引用 output.structured.*。',
+                  'Without an output schema the answer is free text — consumable only by agent / LLM / notify nodes. To feed condition / tool nodes, declare a schema and reference output.structured.*.'
+                )}
+              </div>
             )}
+
+            {/* 试跑 — run this node in isolation, see real output */}
             {canWrite && (selected.data.flowType === 'tool' || selected.data.flowType === 'llm' || selected.data.flowType === 'agent') && (
-              <div className="mt-2">
+              <>
+                <SectionDivider label={tr('试跑', 'Test run')} />
                 <button
                   type="button"
                   onClick={() => void runTest(selected)}
@@ -885,27 +934,7 @@ export default function FlowEditorPage() {
                     </pre>
                   </div>
                 )}
-              </div>
-            )}
-            <SelfOutputRefs
-              node={selected}
-              testOutput={testOut[selected.id]}
-              runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
-              nodeSpecs={nodeSpecs}
-              onCopy={(ref) => {
-                void navigator.clipboard?.writeText(ref);
-                setCopied(ref);
-                window.setTimeout(() => setCopied(''), 1500);
-              }}
-              copied={copied}
-            />
-            {(selected.data.flowType === 'agent' || selected.data.flowType === 'llm') && (
-              <div className="mt-2 rounded-md bg-zinc-900/60 p-2 text-[11px] leading-relaxed text-zinc-500">
-                {tr(
-                  '不声明输出 schema 时，answer 是自由文本——只能接 Agent / LLM / 通知节点；要接条件 / 工具，必须声明 schema 并引用 output.structured.*。',
-                  'Without an output schema the answer is free text — consumable only by agent / LLM / notify nodes. To feed condition / tool nodes, declare a schema and reference output.structured.*.'
-                )}
-              </div>
+              </>
             )}
           </div>
         )}
@@ -1182,23 +1211,55 @@ function ToolPalette({
 // tool's JSON Schema. Falls back to a raw JSON textarea when the schema
 // is unknown (catalog not loaded / custom tool). Values accept {{...}}
 // templates, so every field stays a string in config.args.
+// SectionDivider visually separates the drawer's sections. With a label it
+// also heads the section; without one it's just a rule (the following block
+// carries its own title).
+function SectionDivider({ label }: { label?: string }) {
+  return (
+    <div className={`mt-4 border-t border-zinc-800 ${label ? 'pt-3' : 'pt-2'}`}>
+      {label && <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{label}</div>}
+    </div>
+  );
+}
+
 function ToolArgsForm({
   toolName,
   args,
   schema,
   disabled,
   onChange,
+  section = 'fields',
 }: {
   toolName: string;
   args: Record<string, unknown>;
   schema?: FlowToolMeta;
   disabled: boolean;
   onChange: (args: Record<string, unknown>) => void;
+  // 'desc' renders only the tool name + description; 'fields' only the input
+  // form. The drawer renders the two parts in different sections.
+  section?: 'desc' | 'fields';
 }) {
   const { tr, locale } = useI18n();
   const props = schema?.parameters?.properties;
   const required = new Set(schema?.parameters?.required ?? []);
 
+  // ── description part ──
+  if (section === 'desc') {
+    const desc = locale === 'zh-CN' ? schema?.description_zh || schema?.description : schema?.description;
+    return (
+      <div>
+        <div className="mb-2 flex items-center gap-1.5">
+          <span className="text-[11px] text-zinc-500">{tr('工具', 'Tool')}</span>
+          <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-300">{toolName}</span>
+        </div>
+        {desc && (
+          <div className="rounded-md bg-zinc-900/60 p-2 text-[11px] leading-relaxed text-zinc-500">{desc}</div>
+        )}
+      </div>
+    );
+  }
+
+  // ── fields part ──
   if (!props || Object.keys(props).length === 0) {
     // Unknown schema → raw JSON editor.
     return (
@@ -1255,18 +1316,11 @@ function ToolArgsForm({
 
   return (
     <div>
-      <div className="mb-2 flex items-center gap-1.5">
-        <span className="text-[11px] text-zinc-500">{tr('工具', 'Tool')}</span>
-        <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-300">{toolName}</span>
-      </div>
-      <div className="mb-2 rounded-md bg-zinc-900/60 p-2 text-[11px] leading-relaxed text-zinc-500">
-        {locale === 'zh-CN' ? schema?.description_zh || schema?.description : schema?.description}
-        <div className="mt-1 text-zinc-600">
-          {tr(
-            '可选参数留空即可。数组填 [1, 2]，布尔选 true/false，数字直接填；任意字段也可用 {{…}} 引用上游。',
-            'Leave optional params blank. Arrays as [1, 2], booleans true/false, numbers plain; any field also accepts a {{…}} upstream ref.'
-          )}
-        </div>
+      <div className="mb-2 text-[10px] leading-relaxed text-zinc-600">
+        {tr(
+          '可选参数留空即可。数组填 [1, 2]，布尔选 true/false，数字直接填；任意字段也可用 {{…}} 引用上游。',
+          'Leave optional params blank. Arrays as [1, 2], booleans true/false, numbers plain; any field also accepts a {{…}} upstream ref.'
+        )}
       </div>
       {Object.entries(props).map(([key, spec]) => {
         const type = (spec as { type?: string }).type;
