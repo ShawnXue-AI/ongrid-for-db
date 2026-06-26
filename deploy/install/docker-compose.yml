@@ -237,6 +237,10 @@ services:
       # skills — must survive image upgrades / `compose up`, else a tool's
       # files written in one command vanish before the next.
       - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/workspace:/var/lib/ongrid/workspace
+      # serve_page hosted reports — must survive `compose up` / image upgrades,
+      # else a generated page 404s the moment the manager container is
+      # recreated and its "open generated page" link goes dead.
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/pages:/var/lib/ongrid/pages
     logging:
       driver: json-file
       options:

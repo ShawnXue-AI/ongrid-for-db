@@ -411,11 +411,16 @@ html.light .app-header {
   background: rgba(113, 113, 122, 0.6);
 }
 
-/* Focus ring */
+/* Focus ring. The dark zinc outline reads as a heavy black frame on the light
+   theme — use a soft slate there instead so keyboard/auto focus stays visible
+   but unobtrusive. */
 *:focus-visible {
   outline: 2px solid rgb(63, 63, 70);
   outline-offset: 2px;
   border-radius: 6px;
+}
+html.light *:focus-visible {
+  outline-color: rgb(148 163 184); /* slate-400 — soft, not black */
 }
 
 /* Markdown body styling within assistant bubbles */
