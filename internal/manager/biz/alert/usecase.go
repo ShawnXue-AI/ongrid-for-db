@@ -446,9 +446,14 @@ func (u *Usecase) RecordFiring(ctx context.Context, in FiringInput) (*FiringResu
 		u.investigator.InvestigateAsync(incident)
 	}
 
-	// Workflow auto-trigger (HLD-016 trigger.alert_fired). Same new-only
-	// gate + non-blocking contract as the investigator.
-	if isNew && u.workflowDispatcher != nil {
+	// Workflow auto-trigger (HLD-016 trigger.alert_fired). Non-blocking like
+	// the investigator, but fires on isNew OR isReopen — unlike the
+	// investigator (which stays new-only to spare the LLM bill on flaps), a
+	// remediation workflow SHOULD run again when a resolved alert recurs.
+	// reopen requires the condition to have cleared first, so this is keyed to
+	// real recurrences, not the per-tick re-firings of a still-open incident
+	// (those take the bump path and never reach here).
+	if (isNew || isReopen) && u.workflowDispatcher != nil {
 		var devID uint64
 		if incident.DeviceID != nil {
 			devID = *incident.DeviceID
