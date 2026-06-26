@@ -62,6 +62,7 @@ import {
   type FlowRun,
   type FlowRunNode,
 } from '@/api/flows';
+import { listAgents } from '@/api/agents';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
 import { toolGroupKey, groupTag, groupTitle, orderedGroupKeys } from '@/lib/toolSkill';
@@ -214,7 +215,7 @@ function fromCanvas(nodes: CanvasNode[], edges: Edge[]): FlowGraph {
 
 // ---------- config drawer field specs --------------------------------------
 
-type FieldSpec = { key: string; zh: string; en: string; kind: 'text' | 'textarea' | 'json'; placeholder?: string };
+type FieldSpec = { key: string; zh: string; en: string; kind: 'text' | 'textarea' | 'json' | 'select'; placeholder?: string; options?: string[] };
 
 const CONFIG_FIELDS: Record<FlowNodeType, FieldSpec[]> = {
   'trigger.manual': [],
@@ -283,8 +284,9 @@ function configFieldsFor(type: FlowNodeType, nodeTypes: Record<string, NodeType>
       key: f.key,
       zh: f.label_zh,
       en: f.label_en,
-      kind: f.kind === 'select' ? 'text' : f.kind,
+      kind: f.kind,
       placeholder: f.placeholder,
+      options: f.options,
     }));
   }
   return CONFIG_FIELDS[type] ?? [];
@@ -342,6 +344,8 @@ export default function FlowEditorPage() {
   const [tools, setTools] = useState<FlowToolMeta[]>([]);
   const [toolQuery, setToolQuery] = useState('');
   const [nodeSpecs, setNodeSpecs] = useState<Record<string, NodeType>>({});
+  // available agent personas, for the Agent node's persona dropdown.
+  const [agentNames, setAgentNames] = useState<string[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -415,6 +419,23 @@ export default function FlowEditorPage() {
       })
       .catch(() => {
         /* falls back to the built-in NODE_META / CONFIG_FIELDS tables */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    listAgents()
+      .then((r) => {
+        if (!alive) return;
+        const names = (r.items ?? []).map((a) => a.name).filter(Boolean);
+        // "default" is the top-level persona; ensure it's offered first.
+        setAgentNames(['default', ...names.filter((n) => n !== 'default')]);
+      })
+      .catch(() => {
+        if (alive) setAgentNames(['default']);
       });
     return () => {
       alive = false;
@@ -870,15 +891,23 @@ export default function FlowEditorPage() {
                 refs={pickerRefsFrom(selected.id, nodes, edges, activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes, nodeSpecs, locale)}
               />
             ) : (
-              configFieldsFor(selected.data.flowType, nodeSpecs).map((f) => (
-                <ConfigField
-                  key={f.key}
-                  spec={f}
-                  value={selected.data.config[f.key]}
-                  disabled={!canWrite}
-                  onChange={(v) => patchSelected({ config: { ...selected.data.config, [f.key]: v } })}
-                />
-              ))
+              configFieldsFor(selected.data.flowType, nodeSpecs).map((f) => {
+                // Agent node: turn the free-text persona field into a dropdown
+                // of the available personas (fetched from /agents).
+                const spec: FieldSpec =
+                  selected.data.flowType === 'agent' && f.key === 'persona'
+                    ? { ...f, kind: 'select', options: agentNames, placeholder: tr('default（默认协调者）', 'default (coordinator)') }
+                    : f;
+                return (
+                  <ConfigField
+                    key={f.key}
+                    spec={spec}
+                    value={selected.data.config[f.key]}
+                    disabled={!canWrite}
+                    onChange={(v) => patchSelected({ config: { ...selected.data.config, [f.key]: v } })}
+                  />
+                );
+              })
             )}
 
             {/* 输出参数 — fields this node emits, for downstream refs */}
@@ -1077,7 +1106,21 @@ function ConfigField({
   return (
     <label className="mb-3 block">
       <span className="mb-1 block text-[12px] text-zinc-500">{label}</span>
-      {spec.kind === 'textarea' ? (
+      {spec.kind === 'select' ? (
+        <select
+          value={(value as string) ?? ''}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value || undefined)}
+          className={`${common} cursor-pointer`}
+        >
+          <option value="">{spec.placeholder || tr('（默认）', '(default)')}</option>
+          {(spec.options ?? []).map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+      ) : spec.kind === 'textarea' ? (
         <textarea
           value={(value as string) ?? ''}
           disabled={disabled}
