@@ -40,7 +40,7 @@ graph TB
     end
 
     subgraph "AI 编排层"
-        RUNTIME[Chat Runtime<br/>会话编排 | 技能激活 | Persona 解析]
+        RUNTIME["Chat Runtime<br/>会话编排 | 技能激活 | Persona 解析"]
         GRAPH[ReAct Graph Kernel<br/>eino 图引擎<br/>工具调用循环]
         AGENT[Legacy Agent Kernel<br/>传统 for-loop 引擎]
     end
@@ -314,7 +314,7 @@ flowchart TB
     end
 
     subgraph "BaseTool 接口"
-        BT[BaseTool Interface<br/>Info() → ToolInfo<br/>InvokableRun() → result]
+        BT["BaseTool Interface<br/>Info() → ToolInfo<br/>InvokableRun() → result"]
     end
 
     subgraph "装饰器链 (Decorator Chain)"
@@ -461,7 +461,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[用户: "MySQL 连接数超过 80% 告警"] --> B[协调员识别为告警规则创建]
+    A["用户: MySQL 连接数超过 80% 告警"] --> B[协调员识别为告警规则创建]
     B --> C[调用 list_metric_catalog<br/>query='MySQL connection usage']
     
     C --> D{catalog 有可用指标?}
@@ -674,7 +674,7 @@ flowchart TB
     subgraph "技能属性"
         META[Metadata<br/>Key/Name/Description/Class/Scope]
         PARAMS[ParamSchema<br/>→ LLM JSON Schema]
-        EXEC[Executor<br/>Execute(ctx, paramsJSON) → resultJSON]
+        EXEC["Executor<br/>Execute(ctx, paramsJSON) → resultJSON"]
     end
 
     subgraph "安全分级"
@@ -870,7 +870,7 @@ flowchart LR
         CHAT_PAGE[完整聊天页面<br/>ChatPage]
         SIDE_PANEL[侧边栏 Agent<br/>AgentSidePanel<br/>Cmd+K 唤起]
         MODEL_PICK[模型选择器<br/>ModelSelection]
-        MENTION[@@ 提及搜索<br/>MentionSearch]
+        MENTION["@@ 提及搜索<br/>MentionSearch"]
     end
 
     subgraph "SSE 事件流"
