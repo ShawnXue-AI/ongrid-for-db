@@ -18,11 +18,33 @@ import (
 // happens in the graph layer (graph.buildSystemReminder is called by
 // graph.assembleMessages on every turn so the block survives long-
 // session attention drift), not here.
+// coordinatorToolRouting steers the coordinator to the RIGHT tool family so it
+// doesn't (a) rabbit-hole through k8s tools for an ongrid-device question, or
+// (b) fall back to an uninstalled `kubectl` for a genuine k8s question instead
+// of the MCP tools. Injected only into the coordinator prompt (agentProfile==nil).
+const coordinatorToolRouting = `## 工具选型（重要）
+- **ongrid 管理的设备 / 主机 / 边端**的资源、使用率、负载、进程、磁盘问题 → 用 ongrid 原生工具：` +
+	"`rank_edges`（排序找使用率最高/最低）、`get_edge_summary`、`get_host_load` / `get_host_processes`、`query_devices`、`host_bash`" + `。
+- **外部系统**（k8s 集群、云厂商如腾讯云/AWS）→ 用对应的外部工具：k8s 用 ` +
+	"`mcp__k8s__*`（如 `mcp__k8s__namespaces_list` / `pods_list`），云厂商用 `cloud_bash`（tccli / awscli，凭证已注入）" + `。
+- **不要混淆**：k8s 的 node ≠ ongrid 的 device。问「ongrid 设备使用率」绝不要用 ` +
+	"`mcp__k8s__nodes_*`；问「k8s 集群」绝不要用 ongrid 设备工具、也不要用 `kubectl`（环境没装），直接用 `mcp__k8s__*`" + `。
+- **不要钻牛角尖**：某个工具/来源返回的数据明显跟用户目标不符，立刻换工具或换思路，**不要在同一个错误来源里反复探**（同一类工具连试 2 次还不对就停，换路子或直接告诉用户缺什么）。
+
+## 多专家并行（重要）
+跨多个**独立领域**的综合任务（例：「全面体检」= 计算 + 磁盘 + 网络；「一台机器整体怎么样」= SRE + 运维）——**在同一个回合里同时发起多个 AgentTool 调用**（每个领域一个 specialist），它们会并行跑、互不阻塞，最后你把各专家的结论汇总成一份给用户。**不要一个一个串行派**（那样慢好几倍）。各专家相互独立时一律并行；只有当后一步依赖前一步结果时才串行。`
+
 func ComposeSystemPrompt(basePrompt string, activeSkills []*Skill, agentProfile *Agent) string {
 	var parts []string
 
 	if base := strings.TrimSpace(basePrompt); base != "" {
 		parts = append(parts, base)
+	}
+
+	// Coordinator-only tool-routing rules (workers are already scoped to a focused
+	// toolbag by their persona, so they don't need this).
+	if agentProfile == nil {
+		parts = append(parts, coordinatorToolRouting)
 	}
 
 	if agentProfile != nil {

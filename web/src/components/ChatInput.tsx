@@ -89,7 +89,7 @@ export function ChatInput({
   onWebSearchToggle,
 }: Props) {
   const { tr } = useI18n();
-  const effectivePlaceholder = placeholder ?? tr('从任何想法开始… 按 ⌘↵ 换行 …', 'Start anywhere… Press ⌘↵ for newline …');
+  const effectivePlaceholder = placeholder ?? tr('从任何想法开始… 输入 @ 可调出设备/资源 · Shift+Enter 换行', 'Start anywhere… type @ for devices/resources · Shift+Enter for newline');
   const [internal, setInternal] = useState('');
   const value = controlled ?? internal;
   const setValue = (v: string) => {
@@ -282,10 +282,29 @@ export function ChatInput({
         return;
       }
     }
-    // Cmd+Enter (mac) or Ctrl+Enter inserts a newline; plain Enter submits.
+    // Plain Enter submits; ⌘↵ / Ctrl+↵ and Shift+↵ insert a newline.
     if (e.key === 'Enter') {
-      if (e.metaKey || e.ctrlKey) return;
-      if (e.shiftKey) return; // shift+enter newline
+      if (e.metaKey || e.ctrlKey) {
+        // Browsers don't insert a "\n" for ⌘/Ctrl+Enter in a textarea (unlike
+        // Shift+Enter), so the old `return` did nothing and the "⌘↵ 换行" hint
+        // was a lie. Insert the newline at the caret ourselves and keep the
+        // controlled value + caret in sync.
+        e.preventDefault();
+        const el = ref.current;
+        if (el) {
+          const start = el.selectionStart ?? value.length;
+          const end = el.selectionEnd ?? start;
+          const next = value.slice(0, start) + '\n' + value.slice(end);
+          setValue(next);
+          const caret = start + 1;
+          requestAnimationFrame(() => {
+            el.focus();
+            el.setSelectionRange(caret, caret);
+          });
+        }
+        return;
+      }
+      if (e.shiftKey) return; // shift+enter newline (native)
       e.preventDefault();
       submit();
     }

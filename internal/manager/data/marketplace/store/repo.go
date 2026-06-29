@@ -118,6 +118,24 @@ func (r *Repo) DeleteSoft(ctx context.Context, tenantID uint64, packID string) e
 	return nil
 }
 
+// SetBindings stores the slot→credential JSON for an installed pack
+// (HLD-017 credential binding). Empty/missing pack → ErrNotFound.
+func (r *Repo) SetBindings(ctx context.Context, tenantID uint64, packID, bindingsJSON string) error {
+	if packID == "" {
+		return fmt.Errorf("%w: pack_id required", errs.ErrInvalid)
+	}
+	res := r.db.WithContext(ctx).Model(&model.InstalledPack{}).
+		Where("tenant_id = ? AND pack_id = ? AND deleted_at IS NULL", tenantID, packID).
+		Update("bindings_json", bindingsJSON)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
 // contains is a tiny strings.Contains shim — keeps the import surface
 // small (we only need it for one error-message check above).
 func contains(s, sub string) bool {

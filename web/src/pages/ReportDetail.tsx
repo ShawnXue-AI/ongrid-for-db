@@ -42,7 +42,7 @@ export default function ReportDetailPage() {
   const onDelete = useCallback(async () => {
     if (!window.confirm(tr('删除这份报告？', 'Delete this report?'))) return;
     await deleteReport(id);
-    window.location.href = '/reports';
+    window.location.href = '/pages?tab=reports';
   }, [id, tr]);
 
   if (loading) {
@@ -62,7 +62,7 @@ export default function ReportDetailPage() {
       <header className="app-header border-b border-zinc-800/60 px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <Link to="/reports" className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 print:hidden">
+            <Link to="/pages?tab=reports" className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 print:hidden">
               <ArrowLeft size={12} /> {tr('返回报告', 'Back to reports')}
             </Link>
             <h1 className="mt-1 truncate text-base font-semibold text-zinc-100">{report.title}</h1>

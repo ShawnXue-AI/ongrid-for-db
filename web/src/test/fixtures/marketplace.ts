@@ -37,6 +37,7 @@ export const etcdPack: InstalledPack = {
   manifest_sha256: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
   signature_state: 'unsigned',
   capabilities: etcdCapabilities,
+  bindings: {},
   installed_by: 1,
   installed_at: '2026-05-07T10:00:00Z',
   updated_at: '2026-05-07T10:00:00Z',

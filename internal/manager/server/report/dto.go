@@ -21,6 +21,17 @@ type reportListItem struct {
 	PeriodEnd   time.Time  `json:"period_end"`
 	GeneratedAt *time.Time `json:"generated_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+	// ScheduleID links a report to the 任务 (schedule) that generated it; nil
+	// for manually-generated reports. Surfaced in the list so the 任务 detail
+	// can group its reports and the 产物 report cards can show provenance.
+	ScheduleID *uint64 `json:"schedule_id,omitempty"`
+	// TaskID is the owning-task back-ref (HLD-022), e.g. "report-schedule:42".
+	// Set on scheduled AND run-now reports (unlike ScheduleID), so it's the
+	// canonical key for "this task's artifacts" + the report card's task badge.
+	TaskID string `json:"task_id,omitempty"`
+	// RunID is the trigger/run back-ref (task → run → artifact). Artifacts from
+	// the same trigger share it, so a task detail can group by 触发.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // reportDetail is the full shape for the detail view. ContentJSON is
@@ -30,7 +41,6 @@ type reportDetail struct {
 	Content    json.RawMessage `json:"content"`
 	ContentMD  string          `json:"content_md"`
 	Timezone   string          `json:"timezone"`
-	ScheduleID *uint64         `json:"schedule_id,omitempty"`
 	ErrorMsg   string          `json:"error_msg,omitempty"`
 	ShareToken *string         `json:"share_token,omitempty"`
 	Delivery   json.RawMessage `json:"delivery,omitempty"`
@@ -47,6 +57,9 @@ func toReportListItem(r *model.Report) reportListItem {
 		PeriodEnd:   r.PeriodEnd,
 		GeneratedAt: r.GeneratedAt,
 		CreatedAt:   r.CreatedAt,
+		ScheduleID:  r.ScheduleID,
+		TaskID:      r.TaskID,
+		RunID:       r.RunID,
 	}
 }
 
@@ -63,7 +76,6 @@ func toReportDetail(r *model.Report) reportDetail {
 		reportListItem: toReportListItem(r),
 		ContentMD:      r.ContentMD,
 		Timezone:       r.Timezone,
-		ScheduleID:     r.ScheduleID,
 		ErrorMsg:       r.ErrorMsg,
 		ShareToken:     r.ShareToken,
 	}

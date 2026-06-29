@@ -28,6 +28,9 @@ export type SkillSummary = {
   category?: string;
   params: SkillParamDef[];
   result_preview?: string;
+  // source: "" / "builtin" = shipped; "git"/"tarball"/"local"/"marketplace"
+  // = installed via the marketplace. UI badges installed skills.
+  source?: string;
   // inventory_only: skill is listed for visibility but has no
   // hand-renderable form (raw JSON Schema only). UI should hide the
   // execute button and point the user at chat as the intended caller.

@@ -88,6 +88,12 @@ const BUILTIN_AGENT_I18N: Record<string, { desc: { zh: string; en: string }; whe
       en: 'Reviewer: gates mutating skills (service restart / config change / data delete) with a second-pass risk check.',
     },
   },
+  reporter: {
+    desc: {
+      zh: '定时运维报告 worker：把已算好的事实数据写成带叙事的周期运维报告，聚焦资源趋势与监控覆盖，不只盯故障；不计算、不发明任何数字。',
+      en: 'Scheduled-report worker: turns pre-computed facts into a narrative periodic ops report, focused on resource trends + monitoring coverage (not just incidents); never computes or invents any numbers.',
+    },
+  },
 };
 
 /** Returns a localized copy of an agent summary for the current locale. */

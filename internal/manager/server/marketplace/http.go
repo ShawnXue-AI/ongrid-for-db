@@ -28,6 +28,7 @@ type Service interface {
 	Install(ctx context.Context, caller bizmp.Caller, src bizmp.Source) (*bizmp.InstallResult, error)
 	List(ctx context.Context, caller bizmp.Caller) ([]*model.InstalledPack, error)
 	Uninstall(ctx context.Context, caller bizmp.Caller, packID string) error
+	SetBindings(ctx context.Context, caller bizmp.Caller, packID string, bindings map[string]string) error
 	Registries(ctx context.Context, caller bizmp.Caller) bizmp.AllowedRegistries
 }
 
@@ -43,8 +44,10 @@ func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
 // the auth middleware in front of it (see cmd/ongrid).
 func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/marketplace/install", h.install)
+	r.Post("/v1/marketplace/upload", h.upload)
 	r.Get("/v1/marketplace/installed", h.listInstalled)
 	r.Delete("/v1/marketplace/installed/{pack_id}", h.uninstall)
+	r.Put("/v1/marketplace/installed/{pack_id}/bindings", h.setBindings)
 	r.Get("/v1/marketplace/registries", h.registries)
 }
 
@@ -105,6 +108,30 @@ func (h *Handler) uninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) setBindings(w http.ResponseWriter, r *http.Request) {
+	caller, ok := requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	packID := chi.URLParam(r, "pack_id")
+	if packID == "" {
+		writeErr(w, errs.ErrInvalid)
+		return
+	}
+	var in struct {
+		Bindings map[string]string `json:"bindings"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	if err := h.svc.SetBindings(r.Context(), caller, packID, in.Bindings); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *Handler) registries(w http.ResponseWriter, r *http.Request) {

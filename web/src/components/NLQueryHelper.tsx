@@ -224,7 +224,7 @@ export function NLQueryHelper({ dialect, context, onAccept, children }: NLQueryH
                 rows={3}
                 disabled={submitting || !!result}
                 placeholder={tr(DIALECT_PLACEHOLDERS_ZH[dialect], DIALECT_PLACEHOLDERS_EN[dialect])}
-                className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none disabled:opacity-60"
+                className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none disabled:opacity-60"
               />
             </label>
             <p className="mt-1 text-[11px] text-zinc-500">

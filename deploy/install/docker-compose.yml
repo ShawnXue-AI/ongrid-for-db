@@ -67,6 +67,10 @@ services:
       ONGRID_DB_DIALECT: mysql
       ONGRID_DB_DSN: ongrid:${MYSQL_PASSWORD}@tcp(mysql:3306)/ongrid?parseTime=true&charset=utf8mb4&loc=Local
       ONGRID_JWT_SECRET: ${ONGRID_JWT_SECRET:?ONGRID_JWT_SECRET is required in .env}
+      # HLD-017 credential vault at-rest key (AES-256-GCM). Lives in .env
+      # (outside the DB) so a DB dump alone yields no plaintext credentials.
+      # Unset → an insecure built-in key + a boot warning; set 32+ random chars.
+      ONGRID_SECRET_KEY: ${ONGRID_SECRET_KEY:-}
       ONGRID_JWT_ACCESS_TTL: ${ONGRID_JWT_ACCESS_TTL:-15m}
       ONGRID_JWT_REFRESH_TTL: ${ONGRID_JWT_REFRESH_TTL:-720h}
       ONGRID_ADMIN_EMAIL: ${ONGRID_ADMIN_EMAIL:-}
@@ -222,6 +226,29 @@ services:
       # cp + setting ONGRID_EMBEDDING_MODEL. Read-write because
       # fastembed-go writes its own download-progress lock files.
       - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/embeddings:/var/lib/ongrid/embeddings
+      # HLD-017 cloud skill marketplace: user-installed skills land in
+      # ONGRID_SKILLS_ROOT (=/var/lib/ongrid/skills in-container). MUST be a
+      # host bind-mount — otherwise installed skills live only in the
+      # container layer and are wiped on every `compose up` / image upgrade
+      # (the installed_skills DB row would survive in mysql and dangle).
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/skills:/var/lib/ongrid/skills
+      # HLD-019 agent workspace: per-session persistent cwd for cloud_bash
+      # (terraform .tf/state, scratch files). Same bind-mount rationale as
+      # skills — must survive image upgrades / `compose up`, else a tool's
+      # files written in one command vanish before the next.
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/workspace:/var/lib/ongrid/workspace
+      # cloud_bash runtime tools (cloudBashToolsDir = /var/lib/ongrid/tools):
+      # PYTHONUSERBASE + PATH for runtime-installed CLIs (tccli, awscli, …) and
+      # their bin entrypoints. WITHOUT this mount the manager container can't see
+      # the host-installed tools, so `tccli` etc. fail with "not found" and the
+      # agent wastes turns pip-installing or hand-rolling API calls. Host
+      # bind-mount so tools survive container recreation / image upgrades and
+      # don't bloat the image.
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/tools:/var/lib/ongrid/tools
+      # serve_page hosted reports — must survive `compose up` / image upgrades,
+      # else a generated page 404s the moment the manager container is
+      # recreated and its "open generated page" link goes dead.
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/pages:/var/lib/ongrid/pages
     logging:
       driver: json-file
       options:

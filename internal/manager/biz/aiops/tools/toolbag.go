@@ -73,6 +73,11 @@ var tierByName = map[string]string{
 	"TaskStop":                "core",
 	"draft_config_change":     "core",
 	"apply_config_change":     "core",
+	// Output/communication primitives — small schemas, frequently the point
+	// of a request ("host this report", "send this to the group"). Keep them
+	// full-schema so the LLM picks them instead of falling back to cloud_bash.
+	"serve_page":      "core",
+	"send_im_message": "core",
 
 	// specialty (deferred when over threshold) — host-files trio,
 	// alert detail tools, ranking helpers, mutating restart, generic

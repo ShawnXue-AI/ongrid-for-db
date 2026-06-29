@@ -24,7 +24,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	biz "github.com/ongridio/ongrid/internal/manager/biz/aiops"
@@ -75,6 +77,14 @@ type Service struct {
 	sessions    biz.SessionRepo
 	usage       *biz.UsageUsecase
 	log         *slog.Logger
+
+	// cancels maps an in-flight turn's session id to its cancel func, so an
+	// explicit user "stop" (Esc) can interrupt the turn. This is needed
+	// BECAUSE runWithKernel detaches the turn from the HTTP request ctx
+	// (WithoutCancel, so a refresh doesn't kill it, HLD-021) — passive
+	// disconnect no longer cancels, so stopping requires an explicit signal.
+	cancelMu sync.Mutex
+	cancels  map[string]context.CancelFunc
 }
 
 // RuntimeHandler is the narrow contract the service depends on for the
@@ -105,6 +115,7 @@ func NewWithKernel(a *agent.Agent, runtime RuntimeHandler, kernel Kernel, sessio
 		sessions:    sessions,
 		usage:       usage,
 		log:         log,
+		cancels:     map[string]context.CancelFunc{},
 	}
 }
 
@@ -283,6 +294,24 @@ func (s *Service) runWithKernel(ctx context.Context, caller Caller, sessionID st
 		return nil, err
 	}
 
+	// HLD-021: detach the chat turn from the HTTP request lifecycle. A turn now
+	// routinely blocks for minutes inside cloud_bash waiting on a human
+	// approval; without this a browser refresh / SSE drop cancels the request
+	// ctx and kills the whole in-flight turn (pending approval orphaned, no
+	// continuation). WithoutCancel keeps the request's values (auth/tenant/
+	// emit) but severs cancellation, so the turn runs to completion and
+	// persists regardless of the client connection. Per-tool timeouts + eino
+	// max-steps still bound the work. SSE writes to a dead connection are
+	// swallowed by writeSSE. An EXPLICIT stop is wired just below.
+	ctx = context.WithoutCancel(ctx)
+
+	// ...but make the detached turn explicitly cancellable so a user "stop"
+	// (Esc → StopSession) can interrupt it. Register under the session id;
+	// unregister on return (guarding against a newer turn having replaced us).
+	ctx, cancel := context.WithCancel(ctx)
+	s.registerCancel(sess.ID, cancel)
+	defer s.unregisterCancel(sess.ID, cancel)
+
 	// Graph kernel — only when explicitly enabled AND wired.
 	if s.kernel == KernelGraph && s.runtime != nil {
 		return s.runGraph(ctx, sess, content, emit, opts)
@@ -297,6 +326,57 @@ func (s *Service) runWithKernel(ctx context.Context, caller Caller, sessionID st
 		return nil, errs.ErrNotWiredYet
 	}
 	return s.legacyAgent.RunStreamWithOpts(ctx, sessionID, sess.UserID, content, emit, opts)
+}
+
+// registerCancel records the in-flight turn's cancel under its session id. If
+// a previous turn for the same session is somehow still registered (shouldn't
+// happen — the SPA serializes turns per session), cancel it first so we never
+// leak a turn.
+func (s *Service) registerCancel(sessionID string, cancel context.CancelFunc) {
+	s.cancelMu.Lock()
+	if prev, ok := s.cancels[sessionID]; ok {
+		prev()
+	}
+	s.cancels[sessionID] = cancel
+	s.cancelMu.Unlock()
+}
+
+// unregisterCancel removes the mapping on turn completion — but only if it is
+// still ours. A newer turn (or a StopSession that already fired) may have
+// replaced/cleared the entry; comparing by pointer avoids clobbering it.
+func (s *Service) unregisterCancel(sessionID string, cancel context.CancelFunc) {
+	s.cancelMu.Lock()
+	if cur, ok := s.cancels[sessionID]; ok && sameCancel(cur, cancel) {
+		delete(s.cancels, sessionID)
+	}
+	s.cancelMu.Unlock()
+}
+
+// StopSession interrupts the session's in-flight turn (user pressed Esc). The
+// caller must own the session. Returns whether a turn was actually running.
+// The cancelled turn's cloud_bash wait / LLM call / tool loop unwinds via
+// ctx, the graph soft-fails, and the partial state still persists.
+func (s *Service) StopSession(ctx context.Context, caller Caller, sessionID string) (bool, error) {
+	if _, err := s.GetSession(ctx, caller, sessionID); err != nil {
+		return false, err
+	}
+	s.cancelMu.Lock()
+	cancel, ok := s.cancels[sessionID]
+	if ok {
+		delete(s.cancels, sessionID)
+	}
+	s.cancelMu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	cancel()
+	return true, nil
+}
+
+// sameCancel compares two CancelFunc values by identity. Funcs aren't
+// comparable with ==, so compare their reflect pointers.
+func sameCancel(a, b context.CancelFunc) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
 
 // runGraph dispatches the request through chatruntime.Runtime. The
@@ -378,6 +458,14 @@ func translateRuntimeEvent(ev chatruntime.Event) agent.Event {
 			Result:  ev.Notification.Result,
 			Err:     ev.Notification.Err,
 			Usage:   ev.Notification.Usage,
+		}
+	}
+	if ev.Approval != nil {
+		out.Approval = &agent.ApprovalPendingEvent{
+			ApprovalID:  ev.Approval.ApprovalID,
+			ToolCallID:  ev.Approval.ToolCallID,
+			Command:     ev.Approval.Command,
+			Credentials: ev.Approval.Credentials,
 		}
 	}
 	return out

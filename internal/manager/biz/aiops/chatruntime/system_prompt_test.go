@@ -6,15 +6,17 @@ import (
 )
 
 func TestComposeSystemPrompt_Empty(t *testing.T) {
+	// agentProfile==nil ⇒ coordinator ⇒ the coordinatorToolRouting block is
+	// injected, so even an otherwise-empty compose carries it.
 	got := ComposeSystemPrompt("", nil, nil)
-	if got != "" {
-		t.Errorf("expected empty string, got %q", got)
+	if got != coordinatorToolRouting {
+		t.Errorf("expected just the routing block, got %q", got)
 	}
 }
 
 func TestComposeSystemPrompt_BaseOnly(t *testing.T) {
 	got := ComposeSystemPrompt("you are ongrid.", nil, nil)
-	if got != "you are ongrid." {
+	if got != "you are ongrid.\n\n"+coordinatorToolRouting {
 		t.Errorf("got %q", got)
 	}
 }
@@ -96,7 +98,8 @@ func TestComposeSystemPrompt_NilSkillEntrySkipped(t *testing.T) {
 func TestComposeSystemPrompt_EmptyPromptBody(t *testing.T) {
 	skills := []*Skill{{Name: "empty"}}
 	got := ComposeSystemPrompt("", skills, nil)
-	if got != "[能力: empty]" {
-		t.Errorf("got %q, want '[能力: empty]'", got)
+	// nil agentProfile ⇒ coordinator routing block precedes the skill header.
+	if got != coordinatorToolRouting+"\n\n[能力: empty]" {
+		t.Errorf("got %q", got)
 	}
 }

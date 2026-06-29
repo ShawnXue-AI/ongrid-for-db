@@ -81,16 +81,20 @@ var GetEdgeSummaryBatchSchema = json.RawMessage(`{
     "device_ids": {
       "type": "array",
       "items": {"type": "integer"},
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 16,
-      "description": "设备 id 列表，一次最多 16 个。一次给多个 device_id 拿 metadata + host_load + 24h incidents 一锅。"
+      "description": "设备 id 列表，一次最多 16 个，把它们的 metadata + host_load + 24h incidents 一次性全拿回来（省得逐台单独调）。【省略或留空 = 汇总全部边端设备（最多 16 个）】，适合「巡检 / 体检所有设备」这类不指定具体 id 的请求，无需先查设备清单。"
     }
-  },
-  "required": ["device_ids"]
+  }
 }`)
 
+// edgeSummaryAllCap bounds the "all edges" fan-out (device_ids omitted) so a
+// large fleet doesn't blow past maxItems / the batch timeout in one call.
+const edgeSummaryAllCap = 16
+
 // getEdgeSummaryWhenToUse — batch-first routing hint (N+15).
-const getEdgeSummaryWhenToUse = "一次给多个 device_id 拿 metadata + host_load + 24h incidents 一锅。" +
+const getEdgeSummaryWhenToUse = "一次给多个 device_id，把它们的 metadata + host_load + 24h incidents 一次性全拿回来（省得逐台单独调）。" +
+	"想巡检 / 体检『所有』边端而不指定具体 id 时，device_ids 直接留空即可（自动汇总全部，最多 16 个）。" +
 	"比 get_host_load + get_incident_detail 各自批量更省 LLM 轮次（每条 incidents 只回 trimmed envelope）。" +
 	"NOT for: 单设备深查（用 host_bash + ps + journalctl）/ 集群级聚合（用 rank_edges）/ " +
 	"诊断单个 incident 的 metric+log+trace 关联（用 correlate_incident）/ 列设备清单（用 query_devices）。"
@@ -207,7 +211,19 @@ func (t *GetEdgeSummaryTool) InvokableRun(ctx context.Context, argsJSON string, 
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
 		return "", fmt.Errorf("get_edge_summary: bad args: %w", err)
 	}
-	if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
+	// "All edges" mode: device_ids omitted/empty → summarize every edge
+	// (capped). Lets "巡检所有设备" work without a separate list-devices step.
+	if len(in.DeviceIDs) == 0 {
+		ids, err := t.allEdgeDeviceIDs(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get_edge_summary: list all edges: %w", err)
+		}
+		if len(ids) == 0 {
+			body, _ := json.Marshal(EdgeSummaryBatchResponse{Results: []EdgeSummaryResultEntry{}})
+			return string(body), nil
+		}
+		in.DeviceIDs = ids
+	} else if err := validateBatchIDs("device_ids", in.DeviceIDs); err != nil {
 		return "", fmt.Errorf("get_edge_summary: %w", err)
 	}
 
@@ -228,6 +244,32 @@ func (t *GetEdgeSummaryTool) InvokableRun(ctx context.Context, argsJSON string, 
 		return "", fmt.Errorf("get_edge_summary: marshal: %w", err)
 	}
 	return string(body), nil
+}
+
+// allEdgeDeviceIDs returns identifiers for every edge (capped), used when the
+// caller omits device_ids ("summarize all edges"). Prefers the edge's linked
+// device_id; falls back to the edge id, which resolveEdgeForDevice resolves via
+// its edge-id fallback.
+func (t *GetEdgeSummaryTool) allEdgeDeviceIDs(ctx context.Context) ([]uint64, error) {
+	edges, err := t.edges.List(ctx, edgebiz.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(edges))
+	for _, e := range edges {
+		if e == nil {
+			continue
+		}
+		if e.DeviceID != nil && *e.DeviceID != 0 {
+			ids = append(ids, *e.DeviceID)
+		} else {
+			ids = append(ids, e.ID)
+		}
+		if len(ids) >= edgeSummaryAllCap {
+			break
+		}
+	}
+	return ids, nil
 }
 
 // resolveEdgeForDevice mirrors the closure path's helper but operates

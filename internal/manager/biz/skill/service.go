@@ -19,9 +19,9 @@ import (
 	"log/slog"
 	"time"
 
-	skillcore "github.com/ongridio/ongrid/internal/skill"
 	"github.com/ongridio/ongrid/internal/pkg/errs"
 	"github.com/ongridio/ongrid/internal/pkg/tunnel"
+	skillcore "github.com/ongridio/ongrid/internal/skill"
 )
 
 // Caller is the narrow auth context the service needs. Mirrors
@@ -65,6 +65,11 @@ type Service struct {
 	caller EdgeCaller
 	audit  AuditSink
 	log    *slog.Logger
+	// extra optionally supplies catalog entries from OUTSIDE skillcore —
+	// specifically the chatruntime SkillRegistry's SKILL.md skills (built-in
+	// + marketplace-installed), which live in a separate registry and would
+	// otherwise be invisible in the catalog. Wired in main.go (HLD-017).
+	extra func() []SkillSummary
 }
 
 // New builds the service with the given edge caller (typically the
@@ -74,6 +79,13 @@ func New(caller EdgeCaller, audit AuditSink, log *slog.Logger) *Service {
 		log = slog.Default()
 	}
 	return &Service{caller: caller, audit: audit, log: log}
+}
+
+// WithExtraSkills wires a provider of catalog entries not in skillcore
+// (chatruntime SKILL.md skills). Returns the service for chaining.
+func (s *Service) WithExtraSkills(fn func() []SkillSummary) *Service {
+	s.extra = fn
+	return s
 }
 
 // SkillSummary is the DTO used for the listing endpoint and for the
@@ -89,6 +101,11 @@ type SkillSummary struct {
 	Category      string          `json:"category,omitempty"`
 	Params        []SkillParamDef `json:"params"`
 	ResultPreview string          `json:"result_preview,omitempty"`
+	// Source tags where the entry came from for the catalog UI:
+	// "" / "builtin" = shipped; "marketplace" = installed SKILL.md pack;
+	// "git"/"tarball"/"local" carry the install origin. Lets the UI badge
+	// installed skills distinctly from built-ins.
+	Source string `json:"source,omitempty"`
 	// InventoryOnly flags skills that are listed for visibility but have
 	// no auto-renderable form — i.e. their schema lives only in raw JSON
 	// Schema (RawSchemaProvider) without a declarative ParamSchema. The
@@ -120,6 +137,23 @@ func (s *Service) List(_ context.Context, _ Caller, category string) []SkillSumm
 			continue
 		}
 		out = append(out, toSummary(e))
+	}
+	// Merge chatruntime SKILL.md skills (built-in + marketplace-installed)
+	// so the catalog shows them too — they live in a separate registry.
+	if s.extra != nil {
+		seen := make(map[string]struct{}, len(out))
+		for _, x := range out {
+			seen[x.Key] = struct{}{}
+		}
+		for _, x := range s.extra() {
+			if _, dup := seen[x.Key]; dup {
+				continue
+			}
+			if category != "" && x.Category != category {
+				continue
+			}
+			out = append(out, x)
+		}
 	}
 	return out
 }
@@ -164,7 +198,7 @@ type ExecuteOutput struct {
 //   - safe: any authenticated caller
 //   - mutating: admin only
 //   - dangerous: admin only AND requires SOP signature (not yet wired —
-//                we reject for now until PR-G4 lands signing)
+//     we reject for now until PR-G4 lands signing)
 func (s *Service) Execute(ctx context.Context, caller Caller, in ExecuteInput) (*ExecuteOutput, error) {
 	if in.Key == "" {
 		return nil, fmt.Errorf("%w: skill key required", errs.ErrInvalid)

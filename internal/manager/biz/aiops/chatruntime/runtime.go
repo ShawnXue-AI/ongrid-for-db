@@ -136,6 +136,10 @@ type Event struct {
 	Done         *Reply
 	Error        string
 	Notification *TaskNotification
+	// Approval carries the approval_pending payload — set when
+	// Type == EventApprovalPending and a blocking tool (cloud_bash) has
+	// queued a proposal and is awaiting the human decision (HLD-021).
+	Approval *ApprovalPending
 }
 
 // Emit is the streaming callback. nil-safe.
@@ -214,6 +218,15 @@ type Config struct {
 	// Optional.
 	MentionResolver MentionResolver
 
+	// CredentialBinder (optional) maps the session's active skill names to
+	// the vault credential names their installed packs are bound to
+	// (HLD-017 design-time binding). The runtime attaches the result to ctx
+	// (basetool.WithBoundCredentials) so cloud_bash queues those credentials
+	// for injection at approve time — no LLM/user run-time choice. Wired
+	// post-construction via SetCredentialBinder (marketplace usecase is
+	// built after the runtime).
+	CredentialBinder CredentialBinder
+
 	// BasePrompt is the universal preamble prepended to every
 	// system prompt. Empty = none.
 	BasePrompt string
@@ -231,6 +244,13 @@ type Config struct {
 	// Request.SessionID; the rest of Persistence + Audit + Metrics
 	// + Budget are filled at construction.
 	CallbackDeps callbacks.Deps
+
+	// AgentWriteEnabled, when set, is consulted live (per request) to decide
+	// whether the agent may use write/mutating tools. Returning false forces a
+	// read-only toolbag (same filter as a viewer): every Class!="read" tool is
+	// stripped before the LLM sees it. nil = always enabled (no gate), so an
+	// unwired runtime keeps full behaviour.
+	AgentWriteEnabled func(ctx context.Context) bool
 
 	// Logger may be nil.
 	Logger *slog.Logger
@@ -251,6 +271,13 @@ type Config struct {
 type ToolBagProvider interface {
 	DeferredTools() []basetool.BaseTool
 	AllTools() []basetool.BaseTool
+}
+
+// CredentialBinder resolves the vault credential NAMES bound to whichever
+// installed packs ship the given active skills (HLD-017). The marketplace
+// usecase satisfies this structurally. Returns nil when nothing is bound.
+type CredentialBinder interface {
+	BoundCredentialNamesForSkills(ctx context.Context, skillNames []string) []string
 }
 
 // Runtime is the cutover entry. Construct once at boot via
@@ -303,6 +330,28 @@ func (rt *Runtime) SetMentionResolver(r MentionResolver) {
 		return
 	}
 	rt.cfg.MentionResolver = r
+}
+
+// SetCredentialBinder wires the active-skill→bound-credentials resolver onto
+// the Runtime after construction (the marketplace usecase is built later than
+// the runtime — same chicken-and-egg as the cloud_bash proposer). nil-safe.
+func (rt *Runtime) SetCredentialBinder(b CredentialBinder) {
+	if rt == nil {
+		return
+	}
+	rt.cfg.CredentialBinder = b
+}
+
+// SetAgentWriteEnabledProvider wires the live write-action gate (an admin
+// system_settings toggle). fn is consulted per request; returning false forces
+// a read-only toolbag. nil clears the gate (always enabled). Post-construction
+// setter so cmd/ongrid can hand in a closure over the setting service after the
+// runtime is built.
+func (rt *Runtime) SetAgentWriteEnabledProvider(fn func(ctx context.Context) bool) {
+	if rt == nil {
+		return
+	}
+	rt.cfg.AgentWriteEnabled = fn
 }
 
 // SetToolBag wires the unredacted ToolBag handle onto the Runtime so
@@ -464,6 +513,18 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	if rt.cfg.SkillRegistry != nil {
 		activeSkills = rt.cfg.SkillRegistry.Resolve(req.UserText, policy)
 	}
+	// 5·HLD-017: attach the active skills' design-time bound credentials to
+	// ctx so cloud_bash queues them for injection at approve time. The
+	// binding was chosen at install time; nothing is decided at run time.
+	if rt.cfg.CredentialBinder != nil && len(activeSkills) > 0 {
+		names := make([]string, 0, len(activeSkills))
+		for _, s := range activeSkills {
+			names = append(names, s.Name)
+		}
+		if creds := rt.cfg.CredentialBinder.BoundCredentialNamesForSkills(ctx, names); len(creds) > 0 {
+			ctx = basetool.WithBoundCredentials(ctx, creds)
+		}
+	}
 	// 5a. Top-level persona (Phase 2 of the user-Agent initiative): when
 	// the session was created with a chosen agent (sess.AgentID set), use
 	// that persona's SystemPrompt as the base instead of the global
@@ -483,7 +544,18 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// no persona is loaded, so the LLM never sees host_bash / AgentTool /
 	// restart_service via the viewer's chat session.
 	viewerOnly := req.Role == "viewer"
-	if viewerOnly {
+	// Global write-action gate (admin setting, consulted live per request):
+	// when disabled, force the same read-only toolbag a viewer gets — strip
+	// every Class!="read" tool before the LLM sees it, so even the
+	// propose-confirm writes (cloud_bash, apply_config_change, serve_page,
+	// AgentTool dispatch, host_restart_service, …) are unavailable. A nil
+	// provider means "no gate" → enabled, preserving full behaviour.
+	writeEnabled := true
+	if rt.cfg.AgentWriteEnabled != nil {
+		writeEnabled = rt.cfg.AgentWriteEnabled(ctx)
+	}
+	readOnly := viewerOnly || !writeEnabled
+	if readOnly {
 		sessionToolBag = filterToolsForAgentRole(rt.cfg.ToolBag, nil, isCoordinator, true)
 	}
 	// Resolve the active persona. Sessions with no AgentID still
@@ -507,7 +579,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 			// reach for every deep-dive tool itself. The
 			// coordinatorOnlyTools (AgentTool/SendMessage/TaskStop)
 			// survive the strip via isCoordinator=true.
-			sessionToolBag = filterToolsForAgentRole(rt.cfg.ToolBag, persona, isCoordinator, viewerOnly)
+			sessionToolBag = filterToolsForAgentRole(rt.cfg.ToolBag, persona, isCoordinator, readOnly)
 			agentReminderForPersona = persona.CriticalReminder
 		} else if rt.log != nil && personaName != "default" {
 			rt.log.Info("chatruntime: session agent_id not in registry — using default",
@@ -522,7 +594,26 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// must come AFTER filterToolsForAgent so they survive any name
 	// collision with the (already-stripped) real tools.
 	if isCoordinator && len(rt.cfg.CoordinatorStubs) > 0 {
-		sessionToolBag = append(sessionToolBag, rt.cfg.CoordinatorStubs...)
+		// Stubs are same-name shadows for tool names the filter STRIPPED.
+		// But if a name is BOTH a kept coordinator tool (e.g. merge added
+		// draft_config_change to coordinatorToolNames) AND has a stub, a
+		// blind append duplicates it — and strict LLM APIs (deepseek)
+		// reject "Tool names must be unique", crashing the whole chat.
+		// De-dupe: a real tool already in the bag always wins over its stub.
+		seen := map[string]bool{}
+		for _, t := range sessionToolBag {
+			if info, err := t.Info(ctx); err == nil && info != nil {
+				seen[info.Name] = true
+			}
+		}
+		for _, stub := range rt.cfg.CoordinatorStubs {
+			info, err := stub.Info(ctx)
+			if err != nil || info == nil || seen[info.Name] {
+				continue
+			}
+			seen[info.Name] = true
+			sessionToolBag = append(sessionToolBag, stub)
+		}
 	}
 	// AgentID="default" is the virtual top-level persona — same wiring
 	// as the no-agent coordinator (BasePrompt + full toolBag + agent
@@ -614,6 +705,11 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	invokeOpts = append(invokeOpts, compose.WithToolsNodeOption(
 		compose.WithToolOption(graph.WithInvokeOpts(basetool.WithUserText(req.UserText))),
 	))
+	// Thread the persona-filtered tool view onto ctx so ToolSearch
+	// (which runs inside the graph) only returns tools the current
+	// persona is allowed to see. Must happen BEFORE the coordinator-
+	// stub append so stubs don't leak into the filtered view.
+	ctx = basetool.WithFilteredTools(ctx, sessionToolBag)
 	// Thread the UI locale onto ctx so AgentTool can pick it up and
 	// forward it into the sub-agent's SpawnRequest. Without this, a
 	// coordinator that handles an English question hands off to a
@@ -627,6 +723,18 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// ("openai"), and installs without an OpenAI key see specialists
 	// fail with `provider "openai" not configured`.
 	ctx = basetool.WithLLMChoice(ctx, req.Provider, req.Model)
+	// HLD-019: attach the session id so cloud_bash can resolve a per-session
+	// agent workspace at exec time (files persist across commands in a session
+	// instead of running in a throwaway temp dir).
+	ctx = basetool.WithSessionID(ctx, sess.ID)
+	// Tag artifacts produced in this turn (serve_page) as chat-sourced so the
+	// operations UI's 生成来源 column can tell assistant pages from workflow pages.
+	ctx = basetool.WithArtifactSource(ctx, basetool.ArtifactSourceChat)
+	// Forward the admin write gate to host_bash: when ON, the tool tells the
+	// edge to bypass cmdpolicy and run the raw command. `writeEnabled` was
+	// resolved above (same value that gated the toolbag); reuse it so a single
+	// setting read drives both tool exposure and host-command authority.
+	ctx = basetool.WithHostWriteAllowed(ctx, writeEnabled)
 	// Always autoheal any in-flight tool batch on the way out — covers
 	// the "user closed browser mid-tool-batch" case the in-session
 	// ChatModel.OnStart flush can't reach. Defer with a background-rooted

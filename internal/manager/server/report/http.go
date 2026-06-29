@@ -65,6 +65,13 @@ func (h *Handler) Register(r chi.Router) {
 	r.With(h.requireWriter).Delete("/v1/report-schedules/{id}", h.deleteSchedule)
 	r.With(h.requireWriter).Post("/v1/report-schedules/{id}/toggle", h.toggleSchedule)
 	r.With(h.requireWriter).Post("/v1/report-schedules/{id}/run-now", h.runNow)
+
+	// HLD-022 Phase 2 — unified 任务 surface (recurring schedules ∪ oneoff tasks).
+	r.Get("/v1/tasks", h.listTasks)
+	r.With(h.requireWriter).Post("/v1/tasks/oneoff", h.createOneoffTask)
+	r.Get("/v1/tasks/{id}", h.getTask)
+	r.With(h.requireWriter).Post("/v1/tasks/{id}/run", h.rerunTask)
+	r.With(h.requireWriter).Delete("/v1/tasks/{id}", h.deleteTask)
 }
 
 // RegisterPublic mounts the unauthenticated share route.
@@ -103,6 +110,15 @@ func (h *Handler) listReports(w http.ResponseWriter, r *http.Request) {
 		Limit:  atoiDefault(q.Get("limit"), 50),
 		Offset: atoiDefault(q.Get("offset"), 0),
 	}
+	// schedule_id scopes the list to one schedule's reports.
+	if sid := q.Get("schedule_id"); sid != "" {
+		if v, err := strconv.ParseUint(sid, 10, 64); err == nil {
+			f.ScheduleID = &v
+		}
+	}
+	// task_id scopes to one task's reports (HLD-022) — the canonical 任务 detail
+	// key, covering scheduled + run-now reports.
+	f.TaskID = q.Get("task_id")
 	rows, err := h.uc.ListReports(r.Context(), f)
 	if err != nil {
 		writeErr(w, err)
@@ -168,7 +184,7 @@ func (h *Handler) generateNow(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "{}"
 	}
-	rpt, err := h.uc.GenerateNow(r.Context(), t.UserID, req.Kind, req.Timezone, scope, localeFromRequest(r), period)
+	rpt, err := h.uc.GenerateNow(r.Context(), t.UserID, req.Kind, req.Timezone, scope, localeFromRequest(r), "", period)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -29,6 +29,17 @@ type BashExecRequest struct {
 	// Timeout overrides the policy default per-call ceiling. 0 → use
 	// the sandbox default (30s). Negative is treated as 0.
 	Timeout int `json:"timeout_seconds,omitempty"`
+
+	// Unrestricted, when true, tells the edge to BYPASS cmdpolicy entirely
+	// and run Cmd through a real shell (/bin/sh -c) — binary allowlist,
+	// denied-class list, path allowlist and the shell-metacharacter grammar
+	// (redirects, &&, ||, &) are ALL skipped, so the command runs with the
+	// edge agent's full privileges. The manager only sets this when the
+	// admin "allow Agent write actions" gate is ON (resolved per request via
+	// the AgentWriteEnabled setting). Default false = the locked read-only
+	// cmdpolicy path. This is a deliberate, admin-gated escape hatch — see
+	// internal/manager/biz/aiops/chatruntime/runtime.go for where it's set.
+	Unrestricted bool `json:"unrestricted,omitempty"`
 }
 
 // BashExecResponse is the wire body returned by the edge. Mirrors

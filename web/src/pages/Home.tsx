@@ -162,6 +162,7 @@ export default function HomePage() {
   // 进首页时随机一条问候 + 4 张 prompt 卡；mount 期间不变。
   const greetingPair = useMemo(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)], []);
   const greeting = tr(greetingPair.zh, greetingPair.en);
+  // Pin the webpage-generator card first, then 3 random suggestions.
   const prompts = useMemo(() => samplePrompts(4), []);
 
   useEffect(() => {

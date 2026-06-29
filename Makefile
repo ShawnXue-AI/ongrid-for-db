@@ -18,6 +18,12 @@ TARGET_ARCH ?= amd64
 PLATFORM    ?= $(TARGET_OS)/$(TARGET_ARCH)
 endif
 PACKAGE_TARGET := $(TARGET_OS)-$(TARGET_ARCH)
+# Edge plugin / agent binaries ship amd64-only by default (edges are amd64 in
+# our deployments) — independent of the manager's per-arch TARGET_ARCH. This is
+# the big size lever: otelcol-contrib alone is ~290M per arch. Override to
+# "linux-amd64 linux-arm64" to fetch/bundle more edge arches. Kept in sync with
+# package.sh's EDGE_TARGETS (the staging side).
+EDGE_PLUGIN_ARCHES ?= linux-amd64
 STAGE       := dist/stage/ongrid-$(VERSION)-$(PACKAGE_TARGET)
 OUT         := dist/out
 PACKAGE_CLEAN ?= 1
@@ -263,7 +269,7 @@ FETCH_CURL_FLAGS ?= -fL --retry 3 --retry-all-errors --retry-delay 3 --connect-t
 
 .PHONY: fetch-promtail
 fetch-promtail: ## [release] 下载 promtail 到 bin/<os>-<arch>/promtail (Grafana 只发 linux 版本)
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/promtail; \
 		if [ -f $$dest ]; then \
 			echo "[promtail] $$dest already present — skip"; \
@@ -291,7 +297,7 @@ OTELCOL_VERSION ?= 0.118.0
 
 .PHONY: fetch-otelcol
 fetch-otelcol: ## [release] 下载 otelcol-contrib 到 bin/<os>-<arch>/otelcol-contrib (linux-only)
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/otelcol-contrib; \
 		if [ -f $$dest ]; then \
 			echo "[otelcol] $$dest already present — skip"; \
@@ -330,7 +336,7 @@ MONGODB_EXPORTER_VERSION ?= 0.51.0
 
 .PHONY: fetch-node-exporter
 fetch-node-exporter: ## [release] 下载 node_exporter 到 bin/<os>-<arch>/node_exporter (linux-only)
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/node_exporter; \
 		if [ -f $$dest ]; then \
 			echo "[node_exporter] $$dest already present — skip"; \
@@ -351,7 +357,7 @@ fetch-node-exporter: ## [release] 下载 node_exporter 到 bin/<os>-<arch>/node_
 
 .PHONY: fetch-process-exporter
 fetch-process-exporter: ## [release] 下载 process-exporter 到 bin/<os>-<arch>/process_exporter (linux-only)
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/process_exporter; \
 		if [ -f $$dest ]; then \
 			echo "[process_exporter] $$dest already present — skip"; \
@@ -375,7 +381,7 @@ fetch-process-exporter: ## [release] 下载 process-exporter 到 bin/<os>-<arch>
 fetch-db-exporters: fetch-mysqld-exporter fetch-postgres-exporter fetch-redis-exporter fetch-mongodb-exporter ## [release] 下载数据库 exporter 到 bin/<os>-<arch>/ (linux-only)
 
 fetch-mysqld-exporter: ## [release] 下载 mysqld_exporter 到 bin/<os>-<arch>/mysqld_exporter
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/mysqld_exporter; \
 		if [ -f $$dest ]; then echo "[mysqld_exporter] $$dest already present — skip"; continue; fi; \
 		mkdir -p $(BIN_DIR)/$$target; \
@@ -393,7 +399,7 @@ fetch-mysqld-exporter: ## [release] 下载 mysqld_exporter 到 bin/<os>-<arch>/m
 	done
 
 fetch-postgres-exporter: ## [release] 下载 postgres_exporter 到 bin/<os>-<arch>/postgres_exporter
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/postgres_exporter; \
 		if [ -f $$dest ]; then echo "[postgres_exporter] $$dest already present — skip"; continue; fi; \
 		mkdir -p $(BIN_DIR)/$$target; \
@@ -411,7 +417,7 @@ fetch-postgres-exporter: ## [release] 下载 postgres_exporter 到 bin/<os>-<arc
 	done
 
 fetch-redis-exporter: ## [release] 下载 redis_exporter 到 bin/<os>-<arch>/redis_exporter
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/redis_exporter; \
 		if [ -f $$dest ]; then echo "[redis_exporter] $$dest already present — skip"; continue; fi; \
 		mkdir -p $(BIN_DIR)/$$target; \
@@ -429,7 +435,7 @@ fetch-redis-exporter: ## [release] 下载 redis_exporter 到 bin/<os>-<arch>/red
 	done
 
 fetch-mongodb-exporter: ## [release] 下载 mongodb_exporter 到 bin/<os>-<arch>/mongodb_exporter
-	@for target in linux-amd64 linux-arm64; do \
+	@for target in $(EDGE_PLUGIN_ARCHES); do \
 		dest=$(BIN_DIR)/$$target/mongodb_exporter; \
 		if [ -f $$dest ]; then echo "[mongodb_exporter] $$dest already present — skip"; continue; fi; \
 		mkdir -p $(BIN_DIR)/$$target; \
@@ -460,7 +466,7 @@ fetch-mongodb-exporter: ## [release] 下载 mongodb_exporter 到 bin/<os>-<arch>
 .PHONY: build-edge-bundle
 build-edge-bundle: ## [release] 打 ADR-024 edge upgrade bundle 到 dist/out/edge-bundles/
 	@mkdir -p $(OUT)/edge-bundles
-	@for arch in linux-amd64 linux-arm64; do \
+	@for arch in $(EDGE_PLUGIN_ARCHES); do \
 		bash dist/build-edge-bundle.sh $(VERSION) $$arch $(OUT)/edge-bundles; \
 	done
 

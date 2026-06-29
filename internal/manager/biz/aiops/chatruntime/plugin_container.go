@@ -136,10 +136,16 @@ func LoadPluginContainer(dir string) (*LoadResult, error) {
 		raw      []byte
 	)
 	if kind == ContainerBareSkills {
-		// skills.sh-style drop: no manifest, synthesize one from the
-		// directory name. SHA-256 over the empty manifest stays
-		// deterministic across re-installs of the same dir.
+		// skills.sh-style drop: no manifest file, synthesize one from the
+		// directory name. There's nothing to hash, and hashing the nil
+		// `raw` would give EVERY bare pack the SAME empty-input sha — so
+		// the installer's content-dedupe (GetByManifestSHA) rejects the
+		// 2nd bare skills.sh pack as "identical content already installed".
+		// Derive the manifest sha from the synthesized pack id (directory
+		// name) so distinct bare packs get distinct shas, while the same
+		// dir re-installs to a stable sha (idempotent).
 		pack = synthesizeBareSkillsPack(dir)
+		raw = []byte("bare-skills:" + pack.ID)
 	} else {
 		raw, err = os.ReadFile(manifestPath)
 		if err != nil {

@@ -182,6 +182,10 @@ mkdir -p \
     "$ONGRID_DATA_DIR/qdrant" \
     "$ONGRID_DATA_DIR/grafana" \
     "$ONGRID_DATA_DIR/embeddings" \
+    "$ONGRID_DATA_DIR/skills" \
+    "$ONGRID_DATA_DIR/pages" \
+    "$ONGRID_DATA_DIR/workspace" \
+    "$ONGRID_DATA_DIR/tools" \
     "$ONGRID_LOG_DIR"
 
 # Embedding model cache (ADR-027 Phase-2). Same staging logic as
@@ -189,6 +193,17 @@ mkdir -p \
 # time an upgrade includes it. Idempotent — skip if already there.
 chown -R 65532:65532 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
 chmod -R 0755 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
+# HLD-017 marketplace skills dir must be writable by the manager (uid 65532),
+# else pack install fails with "permission denied" moving staging → install.
+chown -R 65532:65532 "$ONGRID_DATA_DIR/skills" 2>/dev/null || true
+# Manager-written runtime dirs (uid 65532), bind-mounted into the container.
+# An upgrade from a pre-existing install may predate these dirs, so create +
+# chown here too: serve_page (pages), cloud_bash scratch (workspace) +
+# installed tools (tools). Without it docker creates them root-owned → the
+# nonroot manager hits "mkdir page dir: permission denied".
+chown -R 65532:65532 "$ONGRID_DATA_DIR/pages" 2>/dev/null || true
+chown -R 65532:65532 "$ONGRID_DATA_DIR/workspace" 2>/dev/null || true
+chown -R 65532:65532 "$ONGRID_DATA_DIR/tools" 2>/dev/null || true
 if [[ -d "$SCRIPT_DIR/embeddings/fast-bge-small-zh-v1.5" ]]; then
     target="$ONGRID_DATA_DIR/embeddings/fast-bge-small-zh-v1.5"
     if [[ ! -f "$target/model_optimized.onnx" ]]; then
@@ -371,7 +386,13 @@ if [[ -d "$SCRIPT_DIR/edge" ]]; then
     # binaries (no longer double-packed in the tarball — see install.sh /
     # deploy/install/edge/build-edge-bundle.sh). Best-effort; warn on failure.
     if [[ -x "$INSTALL_DIR/edge/build-edge-bundle.sh" && -n "$NEW_VERSION" ]]; then
-        for _edge_arch in linux-amd64 linux-arm64; do
+        # Only rebuild for the edge arch(es) actually staged. v0.9.0+ ships
+        # amd64-only edge binaries (EDGE_TARGETS in package.sh), so glob the
+        # present ongrid-edge-linux-* instead of assuming both arches —
+        # otherwise upgrade warns about the arm64 binaries we didn't ship.
+        for _edge_bin in "$INSTALL_DIR"/edge/ongrid-edge-linux-*; do
+            [[ -f "$_edge_bin" ]] || continue   # no-match glob stays literal; skip
+            _edge_arch="${_edge_bin##*/ongrid-edge-}"   # ongrid-edge-linux-amd64 -> linux-amd64
             "$INSTALL_DIR/edge/build-edge-bundle.sh" "$INSTALL_DIR/edge" "$NEW_VERSION" "$_edge_arch" \
                 || log_warn "edge upgrade bundle rebuild failed for $_edge_arch; one-button edge upgrade unavailable for that arch until next upgrade"
         done

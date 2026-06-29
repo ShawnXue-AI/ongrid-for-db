@@ -97,20 +97,20 @@ export default function SettingsAuditLog() {
         }
       />
 
-      <Card className="p-3">
+      <Card className="mt-4 p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Filter size={14} className="text-zinc-500" />
+          <Filter size={14} className="shrink-0 text-zinc-500" />
           <input
             type="text"
             value={filter.user_email ?? ''}
             onChange={(e) => setFilter((f) => ({ ...f, user_email: e.target.value || undefined }))}
             placeholder={tr('用户邮箱', 'User email')}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600"
           />
           <select
             value={filter.action ?? ''}
             onChange={(e) => setFilter((f) => ({ ...f, action: e.target.value || undefined }))}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600 cursor-pointer"
           >
             <option value="">{tr('全部 action', 'All actions')}</option>
             {actionOptions.map((a) => (
@@ -120,7 +120,7 @@ export default function SettingsAuditLog() {
           <select
             value={filter.resource_type ?? ''}
             onChange={(e) => setFilter((f) => ({ ...f, resource_type: e.target.value || undefined }))}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600 cursor-pointer"
           >
             <option value="">{tr('全部资源', 'All resources')}</option>
             {resourceOptions.map((a) => (
@@ -130,7 +130,7 @@ export default function SettingsAuditLog() {
           <select
             value={filter.status ?? ''}
             onChange={(e) => setFilter((f) => ({ ...f, status: (e.target.value as AuditListFilters['status']) || undefined }))}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600 cursor-pointer"
           >
             <option value="">{tr('全部结果', 'All status')}</option>
             <option value="success">success</option>

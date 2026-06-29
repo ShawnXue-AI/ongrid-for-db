@@ -217,7 +217,11 @@ func (t *BashTool) singleBash(ctx context.Context, deviceID uint64, cmd string, 
 		return entry
 	}
 
-	req := tunnel.BashExecRequest{Cmd: cmd, Timeout: timeout}
+	// When the admin write gate is ON for this request, tell the edge to run
+	// the command unrestricted (cmdpolicy bypassed). Resolved once per chat
+	// turn by the runtime and propagated via ctx; absent → false (locked
+	// read-only), so e2e / non-chat callers stay on the safe path.
+	req := tunnel.BashExecRequest{Cmd: cmd, Timeout: timeout, Unrestricted: basetool.HostWriteAllowedFromContext(ctx)}
 	body, err := json.Marshal(req)
 	if err != nil {
 		entry.Error = fmt.Sprintf("marshal req: %v", err)

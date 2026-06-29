@@ -1,4 +1,4 @@
-﻿// Command ongrid is the cloud-side manager binary. It composes the iam
+// Command ongrid is the cloud-side manager binary. It composes the iam
 // and manager bounded contexts, exposes the public HTTP API, the
 // Prometheus /metrics endpoint, and the manager-side service-end SDK
 // that dials the upstream github.com/singchia/frontier broker.
@@ -14,7 +14,11 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +47,11 @@ import (
 	"github.com/ongridio/ongrid/internal/pkg/httpserver"
 	"github.com/ongridio/ongrid/internal/pkg/llm"
 	"github.com/ongridio/ongrid/internal/pkg/logger"
+	"github.com/ongridio/ongrid/internal/pkg/runner"
+	"github.com/ongridio/ongrid/internal/pkg/secretbox"
+	"github.com/ongridio/ongrid/internal/pkg/workspace"
+
+	"encoding/json"
 	"strconv"
 
 	"github.com/ongridio/ongrid/internal/pkg/embedding"
@@ -93,6 +102,7 @@ import (
 	aiopstoolsdec "github.com/ongridio/ongrid/internal/manager/biz/aiops/tools/decorators"
 	managerbizalert "github.com/ongridio/ongrid/internal/manager/biz/alert"
 	investigator "github.com/ongridio/ongrid/internal/manager/biz/alert/investigator"
+	managerbizapproval "github.com/ongridio/ongrid/internal/manager/biz/approval"
 	managerbizgrafana "github.com/ongridio/ongrid/internal/manager/biz/grafana"
 	managerbizimbridge "github.com/ongridio/ongrid/internal/manager/biz/imbridge"
 	managerbizimbridgefeishu "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/feishu"
@@ -100,15 +110,20 @@ import (
 	managerbizimbridgetelegram "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/telegram"
 	managerbizknowledge "github.com/ongridio/ongrid/internal/manager/biz/knowledge"
 	managerbizmarketplace "github.com/ongridio/ongrid/internal/manager/biz/marketplace"
+	managerbizmcp "github.com/ongridio/ongrid/internal/manager/biz/mcp"
 	managerbizmonitor "github.com/ongridio/ongrid/internal/manager/biz/monitor"
+	managerbizsecret "github.com/ongridio/ongrid/internal/manager/biz/secret"
 	managerbizsetting "github.com/ongridio/ongrid/internal/manager/biz/setting"
 	managerbizskill "github.com/ongridio/ongrid/internal/manager/biz/skill"
 	managerwebshellbiz "github.com/ongridio/ongrid/internal/manager/biz/webshell"
 	manageraiopsdata "github.com/ongridio/ongrid/internal/manager/data/aiops/store"
+	managerapprovaldata "github.com/ongridio/ongrid/internal/manager/data/approval/store"
 	managerimbridgedata "github.com/ongridio/ongrid/internal/manager/data/imbridge/store"
 	managerknowledgedata "github.com/ongridio/ongrid/internal/manager/data/knowledge/store"
 	managermarketplacedata "github.com/ongridio/ongrid/internal/manager/data/marketplace/store"
+	managermcpdata "github.com/ongridio/ongrid/internal/manager/data/mcp/store"
 	managermonitordata "github.com/ongridio/ongrid/internal/manager/data/monitor/store"
+	managersecretdata "github.com/ongridio/ongrid/internal/manager/data/secret/store"
 	managersettingdata "github.com/ongridio/ongrid/internal/manager/data/setting/store"
 	managerwebshelldata "github.com/ongridio/ongrid/internal/manager/data/webshell/store"
 	settingmodel "github.com/ongridio/ongrid/internal/manager/model/setting"
@@ -116,29 +131,36 @@ import (
 	managerserverimbridge "github.com/ongridio/ongrid/internal/manager/server/imbridge"
 	managerserverknowledge "github.com/ongridio/ongrid/internal/manager/server/knowledge"
 	managerwebshellserver "github.com/ongridio/ongrid/internal/manager/server/webshell"
+	mcpclient "github.com/ongridio/ongrid/internal/pkg/mcpclient"
 
 	managerbizaudit "github.com/ongridio/ongrid/internal/manager/biz/audit"
 	managerbizdatabase "github.com/ongridio/ongrid/internal/manager/biz/database"
+	managerbizflow "github.com/ongridio/ongrid/internal/manager/biz/flow"
 	managerbizreport "github.com/ongridio/ongrid/internal/manager/biz/report"
 	manageraudtdata "github.com/ongridio/ongrid/internal/manager/data/audit/store"
+	managerflowdata "github.com/ongridio/ongrid/internal/manager/data/flow/store"
 	managerreportdata "github.com/ongridio/ongrid/internal/manager/data/report/store"
 	managerdbcredentials "github.com/ongridio/ongrid/internal/manager/data/database/credentials"
 	managerdbdata "github.com/ongridio/ongrid/internal/manager/data/database/store"
 	managerserveraiops "github.com/ongridio/ongrid/internal/manager/server/aiops"
 	managerserveralert "github.com/ongridio/ongrid/internal/manager/server/alert"
+	managerserverapproval "github.com/ongridio/ongrid/internal/manager/server/approval"
 	managerserveraudit "github.com/ongridio/ongrid/internal/manager/server/audit"
 	managerserverdevice "github.com/ongridio/ongrid/internal/manager/server/device"
 	managerserverdatabase "github.com/ongridio/ongrid/internal/manager/server/database"
 	managerserveredge "github.com/ongridio/ongrid/internal/manager/server/edge"
 	managerserveredgeauth "github.com/ongridio/ongrid/internal/manager/server/edgeauth"
+	managerserverflow "github.com/ongridio/ongrid/internal/manager/server/flow"
 	managerserverintegration "github.com/ongridio/ongrid/internal/manager/server/integration"
 	managerserverlogs "github.com/ongridio/ongrid/internal/manager/server/logs"
 	managerservermarketplace "github.com/ongridio/ongrid/internal/manager/server/marketplace"
+	managerservermcp "github.com/ongridio/ongrid/internal/manager/server/mcp"
 	managerservermetric "github.com/ongridio/ongrid/internal/manager/server/metric"
 	managermiddleware "github.com/ongridio/ongrid/internal/manager/server/middleware"
 	managerservermonitor "github.com/ongridio/ongrid/internal/manager/server/monitor"
 	managerserverprom "github.com/ongridio/ongrid/internal/manager/server/prometheus"
 	managerserverreport "github.com/ongridio/ongrid/internal/manager/server/report"
+	managerserversecret "github.com/ongridio/ongrid/internal/manager/server/secret"
 	managerserversetting "github.com/ongridio/ongrid/internal/manager/server/setting"
 	managerserverskill "github.com/ongridio/ongrid/internal/manager/server/skill"
 	managerserversystemhealth "github.com/ongridio/ongrid/internal/manager/server/systemhealth"
@@ -236,11 +258,15 @@ func main() {
 		managerbizskill.Migrate,
 		managersettingdata.Migrate,
 		managermarketplacedata.Migrate,
+		managersecretdata.Migrate,
+		managermcpdata.Migrate,
+		managerapprovaldata.Migrate,
 		managermonitordata.Migrate,
 		managerwebshelldata.Migrate,
 		manageraudtdata.Migrate,
 		managerreportdata.Migrate,
-		managerdbdata.Migrate,
+			managerdbdata.Migrate,
+			managerflowdata.Migrate,
 	); err != nil {
 		log.Error("run migrations", slog.Any("err", err))
 		os.Exit(1)
@@ -1587,6 +1613,37 @@ func main() {
 	}
 	reportHandler := managerserverreport.NewHandler(reportUC)
 
+	// Flow orchestration (HLD-016): user-authored workflow DAGs executed
+	// over the existing agent / tool / notify subsystems. Routes mount
+	// even when the LLM runtime is down — tool/notify/condition nodes
+	// still work; only agent nodes degrade with a clear error.
+	flowRepo := managerflowdata.NewRepo(db)
+	flowRunRepo := managerflowdata.NewRunRepo(db)
+	// Captured so MCP tools (discovered later, after mcpUC exists) can be
+	// appended to the same dispatch map the flow engine uses.
+	flowInvoker := newFlowToolInvoker(toolsReg, reg)
+	flowExec := managerbizflow.Executors{
+		Tools:  flowInvoker,
+		Notify: flowNotifierShim{channels: alertRepo, router: notifyRouter},
+		LLM:    flowLLMRunner{client: llmClient},
+	}
+	if flowRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && flowRT != nil {
+		flowExec.Agent = flowAgentRunner{rt: flowRT}
+	}
+	flowUC := managerbizflow.NewUsecase(flowRepo, flowRunRepo,
+		managerbizflow.NewEngine(flowExec, flowRunRepo, log), log).
+		WithToolCatalog(flowToolCatalog{reg: toolsReg}).
+		WithLLM(flowLLMRunner{client: llmClient})
+	flowUC.HealStaleRuns(rootCtx)
+	// HLD-016 triggers: alert dispatcher (auto-start matching flows when an
+	// alert fires) + cron scheduler (time-based flows). Both nil-safe and
+	// independent of the LLM runtime — tool/notify/condition flows run
+	// regardless of whether agent nodes are usable.
+	alertUC.SetWorkflowDispatcher(managerbizflow.NewDispatcher(flowUC, log))
+	managerbizflow.NewScheduler(flowUC, log).Start(rootCtx)
+	flowHandler := managerserverflow.NewHandler(flowUC)
+	log.Info("flow: orchestration wired (alert + cron triggers active)")
+
 	// Boot compensation pass for the structured RCA path: incidents that
 	// fired while no LLM provider was configured had their auto-investigation
 	// silently skipped (RecordFiring nil-checks the investigator), so the
@@ -1691,6 +1748,36 @@ func main() {
 		managerbizskill.NewGormAuditSink(db),
 		log.With(slog.String("comp", "skill")),
 	)
+	// HLD-017: surface chatruntime SKILL.md skills (built-in + marketplace-
+	// installed) in the /v1/skills catalog. They live in a separate registry
+	// from skillcore, so without this an installed pack (e.g. terrashark) is
+	// invisible in the catalog even though the agent already uses it.
+	skillSvc.WithExtraSkills(func() []managerbizskill.SkillSummary {
+		if bootstrapSkillReg == nil {
+			return nil
+		}
+		var out []managerbizskill.SkillSummary
+		for _, sk := range bootstrapSkillReg.All() {
+			if sk == nil || sk.Name == "" {
+				continue
+			}
+			scope := skillcore.ScopeManager
+			if sk.Metadata.Ongrid.Scope == string(skillcore.ScopeHost) {
+				scope = skillcore.ScopeHost
+			}
+			out = append(out, managerbizskill.SkillSummary{
+				Key:           sk.Name,
+				Name:          sk.Name,
+				Description:   sk.Description,
+				Class:         skillcore.ClassSafe,
+				Scope:         scope,
+				Category:      "skill",
+				Source:        firstNonEmpty(sk.Provenance.Source, "builtin"),
+				InventoryOnly: true,
+			})
+		}
+		return out
+	})
 	skillHandler := managerserverskill.NewHandler(skillSvc)
 
 	// marketplace wiring. Install / List / Uninstall on
@@ -1743,6 +1830,273 @@ func main() {
 		DevMode:              mpDevMode,
 	}, log.With(slog.String("comp", "marketplace")))
 	marketplaceHandler := managerservermarketplace.NewHandler(mpUC)
+	// HLD-017 generic secret vault: the single semantics-agnostic credential
+	// store installed skills (and future external-MCP clients) inject from.
+	secretUC := managerbizsecret.NewUsecase(managersecretdata.NewRepo(db))
+	secretHandler := managerserversecret.NewHandler(secretUC)
+	// HLD-018 MCP client: external MCP servers config + connect/list-tools.
+	// Reuses the credential vault (secretUC) for server auth injection.
+	mcpUC := managerbizmcp.NewUsecase(managermcpdata.NewRepo(db), secretUC, log.With(slog.String("comp", "mcp")))
+	mcpHandler := managerservermcp.NewHandler(mcpUC)
+	// HLD-018 + flow: MCP tools are schema-typed callables, so they're
+	// first-class deterministic flow nodes (unlike SKILL.md skills). Wire a
+	// LIVE source into the flow palette + dispatcher now that mcpUC exists —
+	// the palette queries servers per editor load, and the tool node runs them
+	// directly with NO approval (a published flow node is pre-authorized; the
+	// inbox gate is only for agent-initiated calls). flowInvoker is a pointer,
+	// so setting .mcp here is seen by the engine; re-set the catalog to the
+	// MCP-aware one (WithToolCatalog just stores it).
+	mcpFlowSrc := &flowMCPSource{uc: mcpUC, log: log.With(slog.String("comp", "flow-mcp"))}
+	flowInvoker.mcp = mcpFlowSrc
+	flowUC.WithToolCatalog(flowToolCatalog{reg: toolsReg, mcp: mcpFlowSrc})
+	// HLD-017 propose-confirm inbox: human approval queue for dangerous
+	// actions (agent cloud-shell, etc.). Additive — empty until a producer
+	// proposes; producers register their execute-on-approve executor.
+	approvalUC := managerbizapproval.NewUsecase(managerapprovaldata.NewRepo(db), log.With(slog.String("comp", "approval")))
+	approvalHandler := managerserverapproval.NewHandler(approvalUC)
+	// HLD-017 cloud_bash producer: register the execute-on-approve executor
+	// (resolve the bound credential → inject into the Runner sandbox → run)
+	// and wire the cloud_bash tool's proposer seam to the approval inbox.
+	cloudBashRunner := runner.NewShellRunner()
+	// HLD-019 agent workspace: per-session persistent cwd for cloud_bash so a
+	// skill (e.g. terraform-runner) can write .tf/state in one command and read
+	// it back in the next, instead of running in a throwaway temp dir. Root is
+	// a persistent volume; empty disables it (falls back to today's temp dir).
+	workspaceRoot := os.Getenv("ONGRID_WORKSPACE_ROOT")
+	if workspaceRoot == "" {
+		workspaceRoot = "/var/lib/ongrid/workspace"
+	}
+	wsMgr := workspace.New(workspaceRoot)
+	approvalUC.RegisterExecutor("cloud_bash", func(ctx context.Context, payloadJSON string) (string, error) {
+		var p cloudBashPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
+			return "", err
+		}
+		names := append([]string(nil), p.Credentials...)
+		if p.Credential != "" { // legacy single-credential approvals
+			names = append(names, p.Credential)
+		}
+		// Resolve each bound credential's TYPE inject rule and merge into one
+		// env. Later credentials win on key collisions (rare across types).
+		env := map[string]string{}
+		for _, name := range names {
+			injected, _, err := secretUC.ResolveInjection(ctx, name)
+			if err != nil {
+				// Surface the available credential names so the agent can retry
+				// with the right one instead of guessing (it tends to invent
+				// e.g. "tencent" when the vault has "tencent-prod").
+				return "", fmt.Errorf("resolve credential %q: %w%s", name, err, availableCredentialsHint(ctx, secretUC))
+			}
+			for k, v := range injected {
+				env[k] = v
+			}
+		}
+		// Tools live on a host-mounted persistent volume, NOT in the image:
+		// they survive container recreation, don't bloat the image, and the
+		// agent can install more at runtime (each install command is itself
+		// gated by the human approval card). cloudBashToolsDir is the
+		// PYTHONUSERBASE, so `pip install` (PIP_USER) drops packages +
+		// entrypoint scripts under it; its bin dir + every installed skill's
+		// bin dir go on PATH. PIP_BREAK_SYSTEM_PACKAGES sidesteps PEP 668 so a
+		// non-root --user install isn't refused.
+		env["PATH"] = cloudBashToolsDir + "/bin:" + skillBinPATH(marketplaceSkillsRoot)
+		env["PYTHONUSERBASE"] = cloudBashToolsDir
+		env["PIP_USER"] = "1"
+		env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+		env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+		// Optional pip index mirror — tccli + deps from pypi.org can take many
+		// minutes from a China-based host; a mirror cuts it to seconds. Generic
+		// (empty default = pypi); the test env sets it to a Tsinghua mirror.
+		if idx := strings.TrimSpace(os.Getenv("ONGRID_PIP_INDEX_URL")); idx != "" {
+			env["PIP_INDEX_URL"] = idx
+		}
+		// Resolve the session's persistent workspace as cwd (HLD-019). Empty
+		// workdir → runner uses a transient temp dir (legacy behavior).
+		workdir, err := wsMgr.Session(p.SessionID)
+		if err != nil {
+			return "", err
+		}
+		// Give the command a writable HOME. The runner passes ONLY this env map
+		// to the child (it does NOT inherit the manager's environment), so
+		// without this HOME is unset and any tool that writes a dotdir on
+		// startup — tccli → ~/.tccli, awscli → ~/.aws, terraform plugin cache —
+		// fails with a permission/HOME error (the sandbox is non-root and the
+		// passwd home doesn't exist). Point HOME at the session's persistent
+		// workspace so that per-tool state also survives across commands.
+		if workdir != "" {
+			env["HOME"] = workdir
+		}
+		res, err := cloudBashRunner.Run(ctx, runner.Spec{Script: p.Command, Env: env, Workdir: workdir})
+		if err != nil {
+			return "", err
+		}
+		out, _ := json.Marshal(map[string]any{
+			"stdout": res.Stdout, "stderr": res.Stderr,
+			"exit_code": res.ExitCode, "truncated": res.Truncated,
+		})
+		return string(out), nil
+	})
+	// HLD-018 P2: mcp_call executor — on approve, connect the server and run
+	// the tool. Trusted servers skip this and run synchronously in the tool.
+	approvalUC.RegisterExecutor("mcp_call", func(ctx context.Context, payloadJSON string) (string, error) {
+		var p mcpCallPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
+			return "", err
+		}
+		out, err := mcpUC.CallTool(ctx, p.Server, p.Tool, p.Arguments)
+		if err != nil {
+			return "", err
+		}
+		res, _ := json.Marshal(map[string]any{"stdout": out, "exit_code": 0})
+		return string(res), nil
+	})
+	// Conversational skill install (extensions): on approve, fetch + install
+	// the pack from the user-provided source, then summarize what landed (incl.
+	// credential slots, so the agent can next prompt to bind a credential).
+	// Class=destructive — a skill can ship a binary cloud_bash later runs, so
+	// this only runs after a human approves. The approval IS the authorization,
+	// so the install runs with admin authority; installed_by = proposing user.
+	approvalUC.RegisterExecutor("install_skill", func(ctx context.Context, payloadJSON string) (string, error) {
+		var p installSkillPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
+			return "", err
+		}
+		src := managerbizmarketplace.Source{
+			Type: managerbizmarketplace.SourceType(p.Type),
+			URL:  p.URL,
+			Ref:  p.Ref,
+		}
+		res, err := mpUC.Install(ctx, managerbizmarketplace.Caller{UserID: p.UserID, Role: "admin"}, src)
+		if err != nil {
+			return "", err
+		}
+		out, _ := json.Marshal(map[string]any{
+			"installed":        res.Pack.PackID,
+			"version":          res.Pack.Version,
+			"credential_slots": res.Capabilities.Summary.CredentialSlots,
+			"warnings":         res.Warnings,
+		})
+		return string(out), nil
+	})
+	toolsReg.SetCloudBashProposer(cloudBashProposerShim{uc: approvalUC})
+	// send_im_message: the assistant can proactively push to a configured
+	// channel (飞书/钉钉/…), reusing the same BuildSenderFromChannel path the
+	// alert notifier + flow notify node use.
+	toolsReg.SetIMSender(imSenderShim{channels: alertRepo, router: notifyRouter})
+	// serve_page: the assistant can host a generated HTML report at an
+	// internal /pages/<token> URL. Pages live on the persistent volume; the
+	// route is registered on the mux below.
+	pagesDir := "/var/lib/ongrid/pages"
+	if d := os.Getenv("ONGRID_PAGES_DIR"); d != "" {
+		pagesDir = d
+	}
+	pageStore := filePageStore{dir: pagesDir, log: log.With(slog.String("comp", "serve_page"))}
+	if err := os.MkdirAll(pagesDir, 0o755); err != nil {
+		log.Warn("serve_page: mkdir pages dir failed; serve_page disabled", slog.String("dir", pagesDir), slog.Any("err", err))
+	} else {
+		toolsReg.SetPageStore(pageStore)
+	}
+	// The chat runtime's tool bag was compiled far above (line ~1274)
+	// BEFORE the cloud_bash proposer existed, so that BuildBaseTools didn't
+	// yield cloud_bash. SetCloudBashProposer fixes /v1/skills and any FRESH
+	// bag, but the already-built coordinator/worker graph still lacks the
+	// tool — and because the system prompt tells the LLM about cloud_bash,
+	// it issues a call that eino can't route, failing the whole stream with
+	// "tool cloud_bash not found in toolsNode indexes". Bolt it onto the
+	// live bag here, exactly like the AgentTool trio above. The coordinator
+	// (coordinatorToolNames) and specialist-ops (persona Tools list) filters
+	// both whitelist cloud_bash, so this single append reaches both.
+	if chatRT != nil {
+		cbDeps := aiopstoolsdec.Deps{
+			// HLD-021: cloud_bash now BLOCKS in-tool until the human approves
+			// (synchronous propose-confirm), so the per-call timeout must
+			// outlast the approval wait budget (approvalWaitTimeout = 30m) —
+			// a minute longer so the tool's own clean timeout blob wins over a
+			// decorator-imposed ErrToolTimeout. install_skill (same deps)
+			// still returns instantly, so the long bound is harmless there.
+			Timeout:    approvalWaitTimeout + time.Minute,
+			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
+			Registerer: reg,
+		}
+		// serve_page + send_im_message are registered AFTER buildAIOpsRuntime
+		// (SetPageStore / SetIMSender above), so like cloud_bash they're absent
+		// from the startup chat bag and the LLM can't call them in chat — the
+		// exact reason the agent "never triggered serve_page". They're instant
+		// (no human-approval gate), so a short timeout, not cbDeps' 31m ceiling.
+		// First registration on reg here (not in the startup bag) → no
+		// double-register.
+		quickDeps := aiopstoolsdec.Deps{
+			Timeout:    60 * time.Second,
+			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
+			Registerer: reg,
+		}
+		chatRT.AppendToolBag([]aiopstoolsbase.BaseTool{
+			aiopstoolsdec.Wrap(aiopstools.NewCloudBashTool(cloudBashProposerShim{uc: approvalUC}, log), cbDeps),
+			aiopstoolsdec.Wrap(aiopstools.NewInstallSkillTool(installSkillProposerShim{uc: approvalUC}, log), cbDeps),
+			aiopstoolsdec.Wrap(aiopstools.NewServePageTool(pageStore, log), quickDeps),
+			aiopstoolsdec.Wrap(aiopstools.NewSendIMMessageTool(imSenderShim{channels: alertRepo, router: notifyRouter}, log), quickDeps),
+		})
+		log.Info("cloud_bash + install_skill + serve_page + send_im_message bolted onto chat runtime bag", slog.Int("tool_count", chatRT.ToolCount()))
+		// HLD-017: wire the active-skill → bound-credentials resolver so
+		// cloud_bash auto-injects the credentials an active skill was bound
+		// to at install time (design-time binding, no run-time choice).
+		chatRT.SetCredentialBinder(mpUC)
+		// Admin write-action gate: consult the agent/write_enabled system
+		// setting live on every chat request. When an admin turns it off the
+		// agent goes read-only (all non-read tools stripped from the LLM's
+		// toolbag). Default (unset) resolves to enabled, preserving behaviour.
+		chatRT.SetAgentWriteEnabledProvider(func(ctx context.Context) bool {
+			return settingSvc.AgentWriteEnabled(ctx)
+		})
+		// HLD-018 P2: connect each enabled MCP server, pull its tools, and
+		// bolt each onto the toolbag as mcp__<server>__<tool>. Trusted
+		// servers' tools run synchronously; others queue to the approval
+		// inbox. Best-effort per server — a slow/unreachable server is logged
+		// and skipped, never blocks boot.
+		mcpDeps := aiopstoolsdec.Deps{
+			Timeout:    90 * time.Second,
+			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
+			Registerer: reg,
+		}
+		mcpCaller := mcpCallerShim{uc: mcpUC}
+		mcpProposer := mcpProposerShim{uc: approvalUC}
+		// Chat path: bolt enabled servers' tools onto the chat toolbag (boot
+		// snapshot; agent-initiated calls respect each server's trusted flag /
+		// approval). The FLOW path uses the LIVE flowMCPSource wired above, so
+		// it isn't touched here.
+		if servers, err := mcpUC.ListEnabled(rootCtx); err == nil {
+			var mcpTools []aiopstoolsbase.BaseTool
+			for _, srv := range servers {
+				connCtx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
+				cli, berr := mcpUC.BuildClient(connCtx, srv)
+				if berr == nil {
+					berr = cli.Initialize(connCtx)
+				}
+				var mtools []mcpclient.Tool
+				if berr == nil {
+					mtools, berr = cli.ListTools(connCtx)
+				}
+				cancel()
+				if berr != nil {
+					log.Warn("mcp: connect failed, skipping server", slog.String("server", srv.Name), slog.Any("err", berr))
+					continue
+				}
+				for _, mt := range mtools {
+					mcpTools = append(mcpTools, aiopstoolsdec.Wrap(
+						aiopstools.NewMCPTool(srv.Name, mt.Name, mt.Description, mt.InputSchema, srv.Trusted, mcpCaller, mcpProposer, log),
+						mcpDeps))
+				}
+				log.Info("mcp: server connected", slog.String("server", srv.Name), slog.Int("tools", len(mtools)), slog.Bool("trusted", srv.Trusted))
+			}
+			if len(mcpTools) > 0 {
+				chatRT.AppendToolBag(mcpTools)
+				log.Info("mcp tools bolted onto chat runtime bag", slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
+			}
+		}
+	}
+	if secretbox.KeyIsWeak() {
+		log.Warn("secret vault: ONGRID_SECRET_KEY unset — credentials encrypted with an INSECURE built-in key; set ONGRID_SECRET_KEY (32+ random chars) for real at-rest protection")
+	}
 	log.Info("marketplace wired",
 		slog.Bool("dev_mode", mpDevMode),
 		slog.Bool("skill_reload", mpSkillReg != nil),
@@ -1790,6 +2144,10 @@ func main() {
 		invBag := toolsReg.BuildBaseTools()
 		invBag = aiopstools.AppendHostFilesTools(invBag, fbClient, edgeUC, deviceUC, log)
 		toolsReg.RegisterBaseToolsAsSkills(invBag, log.With(slog.String("comp", "inventory-bridge")))
+		// Re-merge so flow `tool` nodes can run tools registered after the
+		// invoker was first built — cloud_bash (its proposer is wired above)
+		// + host-files tools. Without this they report "unknown tool".
+		flowInvoker.mergeBag(invBag)
 	}
 
 	promProxySvc := managersvcprom.New(signer)
@@ -1856,6 +2214,26 @@ func main() {
 		// can't carry our manager JWT. Auth comes from the platform
 		// signature scheme inside the handler.
 		imbridgeHandler.RegisterPublic(api)
+		// serve_page: public read of an assistant-hosted HTML page (under /api
+		// so nginx proxies it to the manager). The random token IS the
+		// capability; id is validated to block path traversal.
+		// Public share route: a minted, TTL-bounded token grants login-free
+		// read. Pages themselves are NOT public — in-app viewing is authed
+		// (GET /api/pages/{id} in the protected group); only an explicit share
+		// exposes a page off-platform, mirroring the report /r/{token} model.
+		api.Get("/p/{token}", func(w http.ResponseWriter, r *http.Request) {
+			id, ok := verifyPageShareToken(cfg.JWT.Secret, chi.URLParam(r, "token"))
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			b, err := pageStore.readPageHTML(id)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			writePageHTML(w, b)
+		})
 		// (admin endpoints registered inside the protected group below)
 
 		api.Group(func(protected chi.Router) {
@@ -1868,6 +2246,56 @@ func main() {
 			protected.Get("/v1/version", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("content-type", "application/json")
 				_, _ = w.Write([]byte(`{"manager_version":"` + version + `"}`))
+			})
+			// Hosted-page management (serve_page artifacts) for the operations
+			// UI. The page CONTENT is served publicly by token at
+			// /api/pages/{id}; these authed routes list + delete them.
+			protected.Get("/v1/pages", func(w http.ResponseWriter, r *http.Request) {
+				items, err := pageStore.List(r.Context())
+				if err != nil {
+					items = []pageMeta{}
+				}
+				w.Header().Set("content-type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+			})
+			protected.Delete("/v1/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
+				if err := pageStore.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			// Authed in-app read of a page (the SPA fetches this with its bearer
+			// and renders it via iframe srcdoc — the page is NOT public).
+			protected.Get("/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
+				id := chi.URLParam(r, "id")
+				if !isHexToken(id) {
+					http.NotFound(w, r)
+					return
+				}
+				b, err := pageStore.readPageHTML(id)
+				if err != nil {
+					http.NotFound(w, r)
+					return
+				}
+				writePageHTML(w, b)
+			})
+			// Mint a TTL-bounded public share link for a page (off-platform,
+			// login-free) — mirrors POST /v1/reports/{id}/share.
+			protected.Post("/v1/pages/{id}/share", func(w http.ResponseWriter, r *http.Request) {
+				id := chi.URLParam(r, "id")
+				if _, err := pageStore.readPageHTML(id); err != nil {
+					http.NotFound(w, r)
+					return
+				}
+				exp := time.Now().Add(pageShareTTL)
+				tok := mintPageShareToken(cfg.JWT.Secret, id, exp)
+				w.Header().Set("content-type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"share_token": tok,
+					"path":        "/api/p/" + tok,
+					"expires_at":  exp.UTC().Format(time.RFC3339),
+				})
 			})
 			iamHandler.RegisterProtected(protected)
 			edgeHandler.Register(protected)
@@ -1891,9 +2319,13 @@ func main() {
 			settingHandler.Register(protected)
 			integrationHandler.Register(protected)
 			marketplaceHandler.Register(protected)
+			secretHandler.Register(protected)
+			mcpHandler.Register(protected)
+			approvalHandler.Register(protected)
 			promProxyHandler.RegisterProtected(protected)
 			managerserveraudit.NewHandler(auditUC).Register(protected)
 			reportHandler.Register(protected)
+			flowHandler.Register(protected)
 		})
 	})
 
@@ -1986,6 +2418,32 @@ func main() {
 			}
 		})
 	}
+
+	// Device presence reconciler: per-event MarkOnline/MarkOffline can't
+	// flip a device offline when its edge no longer exists (hard delete) or
+	// re-registered under a new fingerprint, and a manager restart while an
+	// edge is offline leaves the denormalised flag stale. This sweep flips
+	// online devices back offline when no linked edge is online — healing
+	// orphan "ghost" devices that otherwise read as perpetually online in
+	// the device list / query_devices. Runs once at boot, then every 60s
+	// (same cadence as edge offline detection). See #145.
+	eg.Go(func() error {
+		if _, err := deviceUC.ReconcilePresence(egCtx); err != nil {
+			log.Warn("device presence reconcile (boot) failed", slog.Any("err", err))
+		}
+		t := time.NewTicker(60 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-egCtx.Done():
+				return nil
+			case <-t.C:
+				if _, err := deviceUC.ReconcilePresence(egCtx); err != nil {
+					log.Warn("device presence reconcile failed", slog.Any("err", err))
+				}
+			}
+		}
+	})
 
 	// Pipeline evaluator: runs metric_raw / metric_anomaly /
 	// metric_forecast / metric_burn_rate rules on a ticker. Also refreshes
@@ -2591,6 +3049,28 @@ var coordinatorToolNames = []string{
 	"list_repo_sources",
 	"read_source",
 	"grep_source",
+	// cloud_bash is safe to expose directly on the coordinator: it never
+	// executes — every call only QUEUES a proposal into the human approval
+	// inbox (rendered inline in chat). So the coordinator can offer "run
+	// this in the cloud" without violating the dispatch-only rule.
+	"cloud_bash",
+	// install_skill is safe on the coordinator for the same reason as
+	// cloud_bash: it never installs directly — every call only QUEUES an
+	// approval. Lets the agent extend itself ("install this skill from <url>")
+	// with a human approving the actual install.
+	"install_skill",
+	"draft_config_change",
+	"apply_config_change",
+	// Output/communication primitives — the coordinator is usually the one
+	// that just produced the HTML report or the message text, so let it host
+	// / send directly instead of bouncing through a specialist. Both are
+	// low-risk: serve_page only publishes an internal page, send_im_message
+	// only delivers to a pre-configured channel. Without these here the
+	// persona whitelist strips them out of the coordinator's session bag even
+	// though they're registered in the runtime toolbag (the exact reason the
+	// agent kept saying "I don't have a serve_page tool").
+	"serve_page",
+	"send_im_message",
 }
 
 // Heavy on parameters because every dep flows through this site
@@ -3011,7 +3491,10 @@ func ongridBasePrompt() string {
     - 未命中再走通用诊断或调实时数据工具
     - query 用自然语言整句即可（不必拆词，向量检索喜欢完整语义）
     - 同一会话同一主题只查一次 KB；KB 已答过的话题不要重复查
-`)
+
+	    **RAG-first 例外**：用户是在要求创建告警规则时，不要 query_knowledge，也不要 list_database_sources；按对话式配置规则处理。指标型告警先 ` + bt + `list_metric_catalog` + bt + ` 一次，必要时再 ` + bt + `analyze_database_status` + bt + ` 一次；catalog 有可用指标后再调用 draft_config_change；catalog 为空/不可用时说明缺失并停止；draft_config_change 返回 config_validation_failed 时按 validation.issues 修复并重试，不让用户确认；返回 config_draft/draft_hash 后停止工具调用并等待确认；禁止只输出文字草案，必须有 config_draft/draft_hash 后才能要求确认。确认 apply 时必须使用 config_draft 原始 payload/draft_hash。其它配置类需求说明 v1 暂不支持。
+
+12. **云端执行（cloud_bash）**：需要在云端（manager 侧）跑命令——云厂商 CLI（腾讯云用 ` + bt + `tccli` + bt + `、AWS 用 ` + bt + `awscli` + bt + ` 等）、` + bt + `terraform` + bt + `，或按已安装技能的指导执行操作——用 ` + bt + `cloud_bash` + bt + `。**查看 / 操作某个云厂商的资源时，直接用该厂商的 CLI（腾讯云资源 → ` + bt + `tccli` + bt + `，带上腾讯云凭证），不要假设环境是 Kubernetes、不要上来就 ` + bt + `kubectl` + bt + ` 或检查集群配置——除非用户明确提到 k8s / 集群 / pod / namespace。** 它**不会立即执行**，只把命令提交人工审批，对话里会直接弹出确认卡片，用户批准后才运行；需要云凭证时带 credential 参数（凭证库里的名字），已激活技能绑定的凭证也会自动注入。这是你能直接做的，不必派 specialist，但**不要**引导用户去任何页面（确认就在对话里）。
 }
 
 // webshellStreamerAdapter adapts *managersvcfb.Client to the narrow
@@ -3101,4 +3584,1109 @@ func (r dbInstanceResolver) ResolveDatabaseID(ctx context.Context, edgeID uint64
 		return 0, nil
 	}
 	return insts[0].ID, nil
+
+// flowToolInvoker implements bizflow.ToolInvoker over the aiops tool
+// registry — flow tool nodes dispatch through the SAME decorated BaseTool
+// the palette schema came from (BuildBaseTools), not the legacy
+// Registry.Invoke path — otherwise the canvas shows the new batch schema
+// (device_ids) while execution hits the old Tool (edge_name), and they
+// disagree.
+//
+// We apply decorators.Wrap with the SAME Deps the chat tool bag uses
+// (timeout / ratelimit / metric / tenant_bind) so flow tool invocations
+// are bounded and show up in ongrid_tool_* metrics like chat tool calls.
+// The metric collectors are shared per-Registerer (decorators/metric.go
+// regOrExist), so building this second wrapped set over the same `reg`
+// does NOT double-register.
+//
+// NOTE on ReviewGate: it is NOT installed here — and currently isn't
+// installed on the chat path either, because Deps.ReviewSpawner is left
+// nil system-wide (no reviewer-agent wiring yet). So mutating-class tools
+// (e.g. restart_service) in a flow run UNGUARDED, exactly as on the chat
+// path. That is a pre-existing gap, not specific to flows; when the
+// ReviewSpawner is wired, decide separately whether unattended flow runs
+// (cron/alert) should block on a human reviewer at all.
+// cloudBashProposerShim adapts biz/approval.Usecase to the
+// cloudBashPayload is the approval payload for a queued cloud_bash command.
+// Credentials are vault credential NAMES; the executor resolves each one's
+// TYPE inject rule into env vars at approve time. Credential (singular) is a
+// legacy field kept so an in-flight pre-upgrade approval still resolves.
+type cloudBashPayload struct {
+	Command     string   `json:"command"`
+	Credentials []string `json:"credentials,omitempty"`
+	Credential  string   `json:"credential,omitempty"` // legacy single
+	// SessionID is the chat session that proposed the command (HLD-019). The
+	// executor maps it to a persistent per-session working directory so files
+	// a tool writes in one command survive to the next, instead of running in
+	// a throwaway temp dir. Empty on legacy/pre-upgrade approvals.
+	SessionID string `json:"session_id,omitempty"`
 }
+
+// approvalWaitTimeout bounds how long a synchronous-blocking tool (HLD-021,
+// cloud_bash) waits for a human decision before giving up and returning a
+// terminal timeout blob. The decorator timeout that wraps the tool is set a
+// minute longer (cbDeps.Timeout) so THIS budget is the one that fires first
+// with a clean message.
+const approvalWaitTimeout = 30 * time.Minute
+
+// approvalPollInterval is how often the blocking tool re-reads the approval
+// row while waiting for the human decision.
+const approvalPollInterval = 1500 * time.Millisecond
+
+// cloudBashSystemPATH is the fallback PATH for the cloud_bash sandbox when no
+// installed skill ships a bin dir. Mirrors runner.buildEnv's default.
+const cloudBashSystemPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// cloudBashToolsDir is the host-mounted persistent volume where cloud_bash
+// tools live (the PYTHONUSERBASE for pip --user installs, and a general
+// <dir>/bin on PATH for any binary the agent drops there). Bind-mounted from
+// the host in docker-compose, so tools survive container recreation and never
+// touch the image. An installed tool's command still routes through the human
+// approval card, which is the security boundary (HLD-017/021).
+const cloudBashToolsDir = "/var/lib/ongrid/tools"
+
+// skillBinPATH returns a PATH that prepends every installed skill's bin dir
+// (skillsRoot/<pack>/bin) to the system default, so a CLI an extension ships
+// is callable from cloud_bash. Missing root / no bin dirs → the system PATH
+// unchanged. Order across packs is directory-listing order (stable enough; an
+// operator with colliding tool names across packs should rename).
+func skillBinPATH(skillsRoot string) string {
+	if skillsRoot == "" {
+		return cloudBashSystemPATH
+	}
+	entries, err := os.ReadDir(skillsRoot)
+	if err != nil {
+		return cloudBashSystemPATH
+	}
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bin := filepath.Join(skillsRoot, e.Name(), "bin")
+		if fi, err := os.Stat(bin); err == nil && fi.IsDir() {
+			dirs = append(dirs, bin)
+		}
+	}
+	if len(dirs) == 0 {
+		return cloudBashSystemPATH
+	}
+	return strings.Join(dirs, ":") + ":" + cloudBashSystemPATH
+}
+
+// availableCredentialsHint returns a " (available: a, b)" suffix listing the
+// vault's credential names, for an error message when a cloud_bash credential
+// resolve misses. Empty string when listing fails or the vault is empty —
+// never blocks the real error. Names are not secret (values are).
+func availableCredentialsHint(ctx context.Context, secretUC *managerbizsecret.Usecase) string {
+	if secretUC == nil {
+		return ""
+	}
+	views, err := secretUC.List(ctx)
+	if err != nil || len(views) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(views))
+	for _, v := range views {
+		if v != nil && v.Name != "" {
+			names = append(names, v.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return " (available credentials: " + strings.Join(names, ", ") + ")"
+}
+
+// aiopstools.CloudBashProposer seam — the cloud_bash tool calls
+// ProposeAndAwait to queue a command, surface the inline card, then block on
+// the human decision and get back the real result (HLD-021).
+type cloudBashProposerShim struct{ uc *managerbizapproval.Usecase }
+
+func (s cloudBashProposerShim) ProposeAndAwait(ctx context.Context, command string, credentials []string, sessionID, toolCallID string, userID uint64) (string, error) {
+	title := command
+	if len(title) > 100 {
+		title = title[:100] + "…"
+	}
+	a, err := s.uc.Propose(ctx, managerbizapproval.ProposeInput{
+		Kind:       "cloud_bash",
+		Title:      title,
+		Summary:    strings.Join(credentials, ", "), // plain names; card shows them
+		Payload:    cloudBashPayload{Command: command, Credentials: credentials, SessionID: sessionID},
+		Source:     "agent",
+		SessionID:  sessionID,
+		ProposedBy: userID,
+	})
+	if err != nil {
+		return "", err
+	}
+	// Surface the inline approve/reject card LIVE on the SSE stream that owns
+	// this chat turn. The tool no longer returns a pending_approval result
+	// blob (HLD-021: it blocks, then returns the real output), so the card is
+	// driven by this frame. ToolCallID lets the SPA render it AS the tool
+	// call's existing streaming card (single card). Best-effort: a blocking
+	// (non-SSE) caller has no emitter — the card just won't show, but the
+	// approval still sits in the inbox.
+	if emit := aiopschatruntime.EmitFromContext(ctx); emit != nil {
+		emit(aiopschatruntime.Event{
+			Type: aiopschatruntime.EventApprovalPending,
+			Approval: &aiopschatruntime.ApprovalPending{
+				ApprovalID:  a.ID,
+				ToolCallID:  toolCallID,
+				Command:     command,
+				Credentials: credentials,
+			},
+		})
+	}
+	return s.awaitDecision(ctx, a.ID)
+}
+
+// awaitDecision blocks until the approval row reaches a terminal state, then
+// returns the tool result string the ReAct loop continues with. The approve
+// REST handler runs the executor synchronously and records the result, so a
+// poll only ever reads it back — there is no double execution. "approved"
+// (executor mid-run, result not yet stored) is treated as non-terminal:
+// cloud_bash always has an executor, so it transitions to executed/failed
+// shortly; the timeout is the backstop.
+func (s cloudBashProposerShim) awaitDecision(ctx context.Context, id string) (string, error) {
+	deadline := time.Now().Add(approvalWaitTimeout)
+	ticker := time.NewTicker(approvalPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Stream closed (user navigated away) — stop waiting. The
+			// approval remains pending in the inbox for later decision.
+			return `{"status":"cancelled","message":"The approval wait was interrupted; the command was not run."}`, nil
+		case <-ticker.C:
+			a, err := s.uc.Get(ctx, id)
+			if err != nil {
+				continue // transient read error — keep polling
+			}
+			switch a.Status {
+			case "executed":
+				if a.ResultJSON != nil {
+					return *a.ResultJSON, nil
+				}
+				return `{"status":"executed"}`, nil
+			case "failed":
+				if a.ResultJSON != nil {
+					return *a.ResultJSON, nil
+				}
+				return `{"status":"failed","message":"The approved command failed to run."}`, nil
+			case "rejected":
+				return `{"status":"rejected","message":"The user rejected this command; it was not run. Do not retry it without new instructions."}`, nil
+			}
+			if time.Now().After(deadline) {
+				return `{"status":"timeout","message":"No approval within 30 minutes; the command was not run."}`, nil
+			}
+		}
+	}
+}
+
+// installSkillPayload is the approval payload for a queued conversational
+// skill install (install_skill tool). The executor fetches + installs the
+// pack from the user-provided source after a human approves.
+type installSkillPayload struct {
+	URL    string `json:"url"`
+	Type   string `json:"type"` // "git" | "tarball"
+	Ref    string `json:"ref,omitempty"`
+	UserID uint64 `json:"user_id,omitempty"`
+}
+
+// installSkillProposerShim queues a skill install into the human approval
+// inbox — same propose-confirm model as cloud_bash.
+type installSkillProposerShim struct{ uc *managerbizapproval.Usecase }
+
+func (s installSkillProposerShim) ProposeInstall(ctx context.Context, url, sourceType, ref, sessionID string, userID uint64) (string, error) {
+	title := "install skill: " + url
+	if len(title) > 120 {
+		title = title[:120] + "…"
+	}
+	a, err := s.uc.Propose(ctx, managerbizapproval.ProposeInput{
+		Kind:       "install_skill",
+		Title:      title,
+		Summary:    sourceType,
+		Payload:    installSkillPayload{URL: url, Type: sourceType, Ref: ref, UserID: userID},
+		Source:     "agent",
+		SessionID:  sessionID,
+		ProposedBy: userID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return a.ID, nil
+}
+
+// mcpCallPayload is the approval payload for a queued MCP tool call (HLD-018
+// P2). Server/Tool/Arguments drive the executor; Command is a human-readable
+// one-liner the inline approval card shows (reuses the cloud_bash card).
+type mcpCallPayload struct {
+	Server    string         `json:"server"`
+	Tool      string         `json:"tool"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Command   string         `json:"command"`
+}
+
+// mcpCallerShim is the trusted-server synchronous path for MCP tools.
+type mcpCallerShim struct{ uc *managerbizmcp.Usecase }
+
+func (s mcpCallerShim) CallMCPTool(ctx context.Context, server, tool string, args map[string]any) (string, error) {
+	return s.uc.CallTool(ctx, server, tool, args)
+}
+
+// mcpProposerShim queues an MCP call into the human approval inbox (default,
+// untrusted path) — same propose-confirm model as cloud_bash.
+type mcpProposerShim struct{ uc *managerbizapproval.Usecase }
+
+func (s mcpProposerShim) ProposeMCPCall(ctx context.Context, server, tool string, args map[string]any, sessionID string, userID uint64) (string, error) {
+	argsJSON, _ := json.Marshal(args)
+	cmd := server + " / " + tool + " " + string(argsJSON)
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "…"
+	}
+	a, err := s.uc.Propose(ctx, managerbizapproval.ProposeInput{
+		Kind:       "mcp_call",
+		Title:      cmd,
+		Payload:    mcpCallPayload{Server: server, Tool: tool, Arguments: args, Command: cmd},
+		Source:     "agent",
+		SessionID:  sessionID,
+		ProposedBy: userID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return a.ID, nil
+}
+
+type flowToolInvoker struct {
+	reg   *aiopstools.Registry
+	deps  aiopstoolsdec.Deps
+	tools map[string]aiopstoolsbase.BaseTool
+	// mcp dispatches mcp__ tool nodes LIVE (resolve the current server/tool +
+	// run directly, NO human approval). Wired post-construction once mcpUC
+	// exists. nil → mcp tool nodes error cleanly ("unknown tool").
+	mcp *flowMCPSource
+}
+
+func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Registerer) *flowToolInvoker {
+	inv := &flowToolInvoker{
+		reg: reg,
+		deps: aiopstoolsdec.Deps{
+			Timeout:    15 * time.Second,
+			Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
+			Registerer: registerer,
+		},
+		tools: map[string]aiopstoolsbase.BaseTool{},
+	}
+	inv.mergeBag(reg.BuildBaseTools())
+	return inv
+}
+
+// mergeBag adds every tool in bag not already in the invoker map. Some tools
+// register late (cloud_bash once its proposer is wired; host-files tools) —
+// after the invoker was first built — so without a re-merge the flow `tool`
+// node reports "unknown tool" for them. Only NEW names are Wrap'd: re-wrapping
+// an existing tool would double-register its prometheus metric and panic.
+func (s *flowToolInvoker) mergeBag(bag *aiopstools.ToolBag) {
+	if bag == nil {
+		return
+	}
+	for _, t := range bag.AllTools() {
+		if t == nil {
+			continue
+		}
+		info, err := t.Info(context.Background())
+		if err != nil || info == nil || info.Name == "" {
+			continue
+		}
+		if _, exists := s.tools[info.Name]; exists {
+			continue
+		}
+		s.tools[info.Name] = aiopstoolsdec.Wrap(t, s.deps)
+	}
+}
+
+func (s *flowToolInvoker) InvokeTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+	// Tag any artifact a tool node produces (serve_page) as workflow-sourced so
+	// the operations UI's 生成来源 column distinguishes it from chat-generated pages.
+	ctx = aiopstoolsbase.WithArtifactSource(ctx, aiopstoolsbase.ArtifactSourceWorkflow)
+	// MCP tool nodes dispatch LIVE through the mcp source (resolve the current
+	// server/tool, run directly without an approval card — placing the node in
+	// a published flow IS the human authorization; a per-run inbox approval is
+	// the wrong model for a deterministic, human-authored step). A removed
+	// server/tool surfaces as a clean error → the node's error port.
+	if s.mcp != nil && strings.HasPrefix(name, aiopstools.MCPToolNamePrefix) {
+		return s.mcp.call(ctx, name, args)
+	}
+	t, ok := s.tools[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown tool %q", name)
+	}
+	argsStr := string(args)
+	if argsStr == "" {
+		argsStr = "{}"
+	}
+	// Schema-aware coercion: a {{ref}} can resolve to a value whose type
+	// doesn't match the param (a scalar wired into an array field, a numeric
+	// string into a number field, etc.). Rather than fail with an opaque
+	// unmarshal error, coerce toward the declared type (the n8n / Dify way).
+	if info, ierr := t.Info(ctx); ierr == nil && len(info.Parameters) > 0 {
+		argsStr = coerceArgsToSchema(argsStr, info.Parameters)
+	}
+	out, err := t.InvokableRun(ctx, argsStr)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(out), nil
+}
+
+// coerceArgsToSchema nudges resolved tool args toward the types their JSON
+// Schema declares, so a {{ref}} that resolved to the "wrong" shape still works
+// instead of erroring deep in the tool's unmarshal. Best-effort: any arg it
+// can't confidently convert is left untouched. Covers the common flow-wiring
+// mismatches: scalar→array, "[…]"-string→array, numeric-string→number,
+// "true"/"false"→bool, json-string→object.
+func coerceArgsToSchema(argsStr string, schema json.RawMessage) string {
+	var sc struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if json.Unmarshal(schema, &sc) != nil || len(sc.Properties) == 0 {
+		return argsStr
+	}
+	var args map[string]any
+	if json.Unmarshal([]byte(argsStr), &args) != nil {
+		return argsStr
+	}
+	changed := false
+	for k, v := range args {
+		p, ok := sc.Properties[k]
+		if !ok {
+			continue
+		}
+		if nv, did := coerceValue(v, p.Type); did {
+			args[k] = nv
+			changed = true
+		}
+	}
+	if !changed {
+		return argsStr
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return argsStr
+	}
+	return string(b)
+}
+
+func coerceValue(v any, typ string) (any, bool) {
+	switch typ {
+	case "array":
+		if _, isArr := v.([]any); isArr {
+			return v, false
+		}
+		if str, isStr := v.(string); isStr {
+			var arr []any
+			if json.Unmarshal([]byte(strings.TrimSpace(str)), &arr) == nil {
+				return arr, true // "[1, 2]" / "[{{ref}}]"-resolved → real array
+			}
+			return []any{str}, true
+		}
+		if v == nil {
+			return v, false
+		}
+		return []any{v}, true // wrap a scalar into a single-element array
+	case "number":
+		if str, isStr := v.(string); isStr {
+			if n, err := strconv.ParseFloat(strings.TrimSpace(str), 64); err == nil {
+				return n, true
+			}
+		}
+	case "integer":
+		if str, isStr := v.(string); isStr {
+			if n, err := strconv.ParseInt(strings.TrimSpace(str), 10, 64); err == nil {
+				return n, true
+			}
+		}
+	case "boolean":
+		if str, isStr := v.(string); isStr {
+			switch strings.ToLower(strings.TrimSpace(str)) {
+			case "true":
+				return true, true
+			case "false":
+				return false, true
+			}
+		}
+	case "object":
+		if str, isStr := v.(string); isStr {
+			var m map[string]any
+			if json.Unmarshal([]byte(strings.TrimSpace(str)), &m) == nil {
+				return m, true
+			}
+		}
+	}
+	return v, false
+}
+
+// flowMCPSource live-queries the registered MCP servers (HLD-018) so the flow
+// tool palette and the `tool` node always reflect the CURRENT tool universe —
+// add/remove a server and it shows up / drops out without a restart (n8n's
+// McpClient live-listSearch pattern). MCP tools carry a JSON inputSchema, so
+// they are first-class deterministic nodes (skills, lacking a schema, are not).
+type flowMCPSource struct {
+	uc  *managerbizmcp.Usecase
+	log *slog.Logger
+}
+
+// mcpEntry is one live MCP tool: its wire name + the (server, bareTool) needed
+// to dispatch it, plus the schema for the node's param form.
+type mcpEntry struct {
+	wire   string
+	server string
+	bare   string
+	desc   string
+	schema json.RawMessage
+}
+
+// enumerate connects to every enabled server and lists its tools. Best-effort:
+// an unreachable server is logged and skipped (degradation, not a hard fail).
+func (m *flowMCPSource) enumerate(ctx context.Context) []mcpEntry {
+	if m == nil || m.uc == nil {
+		return nil
+	}
+	servers, err := m.uc.ListEnabled(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []mcpEntry
+	for _, srv := range servers {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cli, berr := m.uc.BuildClient(cctx, srv)
+		if berr == nil {
+			berr = cli.Initialize(cctx)
+		}
+		var tools []mcpclient.Tool
+		if berr == nil {
+			tools, berr = cli.ListTools(cctx)
+		}
+		cancel()
+		if berr != nil {
+			if m.log != nil {
+				m.log.Warn("flow mcp: list failed, skipping server", slog.String("server", srv.Name), slog.Any("err", berr))
+			}
+			continue
+		}
+		for _, t := range tools {
+			out = append(out, mcpEntry{
+				wire:   aiopstools.MCPToolName(srv.Name, t.Name),
+				server: srv.Name,
+				bare:   t.Name,
+				desc:   t.Description,
+				schema: t.InputSchema,
+			})
+		}
+	}
+	return out
+}
+
+// metas returns the live MCP tools as flow palette entries.
+func (m *flowMCPSource) metas(ctx context.Context) []managerbizflow.ToolMeta {
+	entries := m.enumerate(ctx)
+	out := make([]managerbizflow.ToolMeta, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, managerbizflow.ToolMeta{
+			Name:        e.wire,
+			DisplayZh:   e.bare,
+			Description: e.desc,
+			// Infer read vs destructive from the tool name so read-only MCP
+			// tools (k8s list/get/log/...) are single-node test-runnable;
+			// mutating/unknown ones stay gated to full-flow runs.
+			Class:      aiopstools.MCPToolClass(e.bare),
+			Category:   "integration",
+			Parameters: e.schema,
+		})
+	}
+	return out
+}
+
+// call resolves a wire name to its current (server, bareTool) and dispatches
+// directly via the usecase (NO approval). Narrows by server prefix first so it
+// only lists the one matching server's tools, not all of them.
+func (m *flowMCPSource) call(ctx context.Context, wire string, args json.RawMessage) (json.RawMessage, error) {
+	if m == nil || m.uc == nil {
+		return nil, fmt.Errorf("unknown tool %q", wire)
+	}
+	servers, err := m.uc.ListEnabled(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: list servers: %w", err)
+	}
+	for _, srv := range servers {
+		if !strings.HasPrefix(wire, aiopstools.MCPToolName(srv.Name, "")) {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cli, berr := m.uc.BuildClient(cctx, srv)
+		if berr == nil {
+			berr = cli.Initialize(cctx)
+		}
+		var tools []mcpclient.Tool
+		if berr == nil {
+			tools, berr = cli.ListTools(cctx)
+		}
+		cancel()
+		if berr != nil {
+			return nil, fmt.Errorf("mcp %q: server %q unreachable: %w", wire, srv.Name, berr)
+		}
+		for _, t := range tools {
+			if aiopstools.MCPToolName(srv.Name, t.Name) != wire {
+				continue
+			}
+			var argMap map[string]any
+			if len(args) > 0 {
+				if uerr := json.Unmarshal(args, &argMap); uerr != nil {
+					return nil, fmt.Errorf("mcp %q: bad args: %w", wire, uerr)
+				}
+			}
+			res, cerr := m.uc.CallTool(ctx, srv.Name, t.Name, argMap)
+			if cerr != nil {
+				return nil, fmt.Errorf("mcp %q: %w", wire, cerr)
+			}
+			return json.RawMessage(res), nil
+		}
+		return nil, fmt.Errorf("mcp %q: tool no longer exists on server %q", wire, srv.Name)
+	}
+	return nil, fmt.Errorf("mcp %q: no enabled server matches", wire)
+}
+
+// flowAgentRunner implements bizflow.AgentRunner over the chatruntime —
+// one synchronous worker per agent node (mirrors the RCA investigator's
+// WorkerSpawner usage).
+type flowAgentRunner struct{ rt *aiopschatruntime.Runtime }
+
+func (s flowAgentRunner) RunAgent(ctx context.Context, persona, prompt string) (string, error) {
+	w, err := s.rt.SpawnWorker(ctx, aiopschatruntime.SpawnRequest{
+		AgentName:   persona,
+		Prompt:      prompt,
+		Background:  false, // sync — the flow engine owns concurrency
+		SessionKind: "flow",
+	})
+	if err != nil {
+		return "", err
+	}
+	if w == nil {
+		return "", fmt.Errorf("agent runner: nil worker")
+	}
+	if w.Status != aiopschatruntime.WorkerStatusCompleted {
+		reason := w.Err
+		if reason == "" {
+			reason = string(w.Status)
+		}
+		return "", fmt.Errorf("agent worker %s: %s", w.ID, reason)
+	}
+	return w.Result, nil
+}
+
+// flowLLMRunner implements bizflow.LLMRunner over the routing llm.Client
+// — one chat completion, no tools, no agent loop. Provider/Model left
+// empty so the call follows the configured default (DefaultResolver),
+// same as the report extractor / RCA summarizer.
+type flowLLMRunner struct{ client llm.Client }
+
+func (s flowLLMRunner) RunLLM(ctx context.Context, system, user string) (string, error) {
+	if s.client == nil {
+		return "", fmt.Errorf("llm client not configured")
+	}
+	msgs := make([]llm.Message, 0, 2)
+	if strings.TrimSpace(system) != "" {
+		msgs = append(msgs, llm.Message{Role: "system", Content: system})
+	}
+	msgs = append(msgs, llm.Message{Role: "user", Content: user})
+	resp, err := s.client.Chat(ctx, llm.ChatReq{Messages: msgs})
+	if err != nil {
+		return "", err
+	}
+	return resp.Assistant.Content, nil
+}
+
+// imSenderShim implements aiopstools.IMSender (the send_im_message tool seam)
+// over the alert channel store + notify router — same BuildSenderFromChannel
+// path the alert notifier / flow notify node use.
+type imSenderShim struct {
+	channels *manageralertdata.Repo
+	router   *notify.Router
+}
+
+func (s imSenderShim) ListIMChannels(ctx context.Context) ([]aiopstools.IMChannel, error) {
+	chs, err := s.channels.ListChannels(ctx, managerbizalert.ChannelFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]aiopstools.IMChannel, 0, len(chs))
+	for _, ch := range chs {
+		if !ch.Enabled {
+			continue
+		}
+		out = append(out, aiopstools.IMChannel{ID: ch.ID, Name: ch.Name, Kind: ch.ChannelType})
+	}
+	return out, nil
+}
+
+func (s imSenderShim) SendIM(ctx context.Context, channelID uint64, title, text string) error {
+	ch, err := s.channels.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("channel %d: not found", channelID)
+	}
+	if !ch.Enabled {
+		return fmt.Errorf("channel %q: disabled", ch.Name)
+	}
+	sender, err := managerbizalert.BuildSenderFromChannel(ch)
+	if err != nil {
+		return err
+	}
+	msg := notify.Message{
+		Subject:    title,
+		Body:       text,
+		Severity:   notify.SeverityInfo,
+		Source:     "assistant",
+		OccurredAt: time.Now().UTC(),
+	}
+	return s.router.SendVia(ctx, msg, sender)
+}
+
+// filePageStore implements aiopstools.PageStore (the serve_page seam) by
+// writing each page to a file on the persistent volume, served back at
+// /pages/<id>. id is a random hex token = the capability (unguessable URL).
+type filePageStore struct {
+	dir string
+	log *slog.Logger
+}
+
+// pageMeta is the sidecar record for a hosted page, written next to its HTML so
+// the operations UI can list pages with a title + timestamp without parsing
+// every document.
+type pageMeta struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"` // RFC3339
+	URL       string `json:"url"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	// Source is the origin code ("chat" / "workflow") stamped via ctx at
+	// generation time — drives the operations UI's 生成来源 column. Empty for
+	// legacy pages written before this field existed.
+	Source string `json:"source,omitempty"`
+}
+
+// SavePage hosts an assistant-generated HTML page under its own directory
+// (pages/<id>/index.html) with a meta.json sidecar — so the operations UI can
+// list / preview / delete it, and a page can ship assets later. The random id
+// is the capability.
+func (s filePageStore) SavePage(ctx context.Context, title, html string) (string, string, error) {
+	var rb [12]byte
+	if _, err := crand.Read(rb[:]); err != nil {
+		return "", "", fmt.Errorf("rand: %w", err)
+	}
+	id := hex.EncodeToString(rb[:])
+	dir := filepath.Join(s.dir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", fmt.Errorf("mkdir page dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(html), 0o644); err != nil {
+		return "", "", fmt.Errorf("write page: %w", err)
+	}
+	url := "/api/pages/" + id
+	meta := pageMeta{ID: id, Title: strings.TrimSpace(title), CreatedAt: time.Now().UTC().Format(time.RFC3339), URL: url, SizeBytes: int64(len(html)), Source: aiopstoolsbase.ArtifactSourceFromContext(ctx)}
+	if mb, err := json.Marshal(meta); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "meta.json"), mb, 0o644)
+	}
+	return id, url, nil
+}
+
+// readPageHTML returns the hosted HTML for id, supporting both the directory
+// layout (pages/<id>/index.html) and the legacy flat file (pages/<id>.html).
+func (s filePageStore) readPageHTML(id string) ([]byte, error) {
+	if b, err := os.ReadFile(filepath.Join(s.dir, id, "index.html")); err == nil {
+		return b, nil
+	}
+	return os.ReadFile(filepath.Join(s.dir, id+".html"))
+}
+
+// List returns hosted pages newest-first for the operations UI.
+func (s filePageStore) List(_ context.Context) ([]pageMeta, error) {
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]pageMeta, 0, len(ents))
+	for _, e := range ents {
+		var id string
+		if e.IsDir() {
+			id = e.Name()
+		} else if strings.HasSuffix(e.Name(), ".html") {
+			id = strings.TrimSuffix(e.Name(), ".html") // legacy flat page
+		} else {
+			continue
+		}
+		if !isHexToken(id) {
+			continue
+		}
+		m := pageMeta{ID: id, URL: "/api/pages/" + id}
+		if mb, err := os.ReadFile(filepath.Join(s.dir, id, "meta.json")); err == nil {
+			_ = json.Unmarshal(mb, &m)
+			m.ID, m.URL = id, "/api/pages/"+id // identity always derived, never trusted from sidecar
+		}
+		if m.Title == "" {
+			if b, err := s.readPageHTML(id); err == nil {
+				m.Title = extractHTMLTitle(b)
+			}
+		}
+		if m.CreatedAt == "" {
+			if info, err := e.Info(); err == nil {
+				m.CreatedAt = info.ModTime().UTC().Format(time.RFC3339)
+			}
+		}
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
+}
+
+// Delete removes a hosted page (directory layout or legacy flat file).
+func (s filePageStore) Delete(_ context.Context, id string) error {
+	if !isHexToken(id) {
+		return fmt.Errorf("%w: invalid page id", errs.ErrInvalid)
+	}
+	_ = os.Remove(filepath.Join(s.dir, id+".html")) // legacy flat
+	return os.RemoveAll(filepath.Join(s.dir, id))
+}
+
+// extractHTMLTitle best-effort pulls <title> out of a page that has no sidecar.
+func extractHTMLTitle(b []byte) string {
+	lo := strings.ToLower(string(b))
+	i := strings.Index(lo, "<title>")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(lo[i+7:], "</title>")
+	if j < 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(b)[i+7 : i+7+j])
+}
+
+// pageShareTTL bounds how long a minted page share link stays valid — matches
+// the report share TTL so the two share models behave the same.
+const pageShareTTL = 30 * 24 * time.Hour
+
+// mintPageShareToken returns a stateless signed token that grants
+// unauthenticated read of pageID until exp. Pages are file-based (no DB row to
+// hang a token on like reports), so the token carries its own claims:
+// base64url(pageID|expUnix).hmac. Deleting the page still revokes it (the serve
+// path checks the file exists); short TTL bounds exposure otherwise.
+func mintPageShareToken(secret, pageID string, exp time.Time) string {
+	body := pageID + "|" + strconv.FormatInt(exp.Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(body))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return base64.RawURLEncoding.EncodeToString([]byte(body)) + "." + sig
+}
+
+// verifyPageShareToken validates a share token's signature + expiry and returns
+// the page id it grants.
+func verifyPageShareToken(secret, token string) (string, bool) {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	bodyB, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(bodyB)
+	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(want), []byte(parts[1])) {
+		return "", false
+	}
+	seg := strings.SplitN(string(bodyB), "|", 2)
+	if len(seg) != 2 || !isHexToken(seg[0]) {
+		return "", false
+	}
+	expUnix, err := strconv.ParseInt(seg[1], 10, 64)
+	if err != nil || time.Now().Unix() > expUnix {
+		return "", false
+	}
+	return seg[0], true
+}
+
+// writePageHTML serves hosted page bytes with the sandbox CSP. The HTML is
+// LLM-generated; the sandbox directive loads it in an opaque origin with
+// scripts disabled, so it can't read the SPA's JWT from localStorage. Inline
+// styles + images still render.
+func writePageHTML(w http.ResponseWriter, b []byte) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox allow-popups allow-downloads")
+	_, _ = w.Write(b)
+}
+
+// isHexToken guards the /pages/{id} route against path traversal — id must be
+// a bare lowercase-hex token.
+func isHexToken(s string) bool {
+	if len(s) < 16 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// flowNotifierShim implements bizflow.Notifier over the alert channel
+// store + notify router — same BuildSenderFromChannel path the alert
+// notifier and report deliverer use.
+type flowNotifierShim struct {
+	channels *manageralertdata.Repo
+	router   *notify.Router
+}
+
+func (s flowNotifierShim) Notify(ctx context.Context, channelIDs []uint64, title, message string) error {
+	var firstErr error
+	sent := 0
+	for _, id := range channelIDs {
+		ch, err := s.channels.GetChannelByID(ctx, id)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("channel %d: not found", id)
+			}
+			continue
+		}
+		if !ch.Enabled {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("channel %d: disabled", id)
+			}
+			continue
+		}
+		sender, err := managerbizalert.BuildSenderFromChannel(ch)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("channel %d: %w", id, err)
+			}
+			continue
+		}
+		msg := notify.Message{
+			Subject:    title,
+			Body:       message,
+			Severity:   notify.SeverityInfo,
+			Source:     "flow",
+			OccurredAt: time.Now().UTC(),
+		}
+		if err := s.router.SendVia(ctx, msg, sender); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("channel %d: %w", id, err)
+			}
+			continue
+		}
+		sent++
+	}
+	if sent == 0 && firstErr != nil {
+		return firstErr
+	}
+	return nil
+}
+
+// flowToolCatalog implements bizflow.ToolCatalog over the aiops tool
+// registry — surfaces every registered BaseTool to the canvas palette so
+// each becomes a draggable, form-driven `tool` node. Rebuilds the bag per
+// call (cheap, low-frequency: editor load) so newly registered tools show
+// up without a restart. mcp (optional) live-queries the registered MCP
+// servers each call so their tools appear/disappear without a restart too.
+type flowToolCatalog struct {
+	reg *aiopstools.Registry
+	mcp *flowMCPSource
+}
+
+func (c flowToolCatalog) ListTools() []managerbizflow.ToolMeta {
+	bag := c.reg.BuildBaseTools()
+	if bag == nil {
+		return nil
+	}
+	all := bag.AllTools()
+	out := make([]managerbizflow.ToolMeta, 0, len(all))
+	ctx := context.Background()
+	for _, t := range all {
+		if t == nil {
+			continue
+		}
+		info, err := t.Info(ctx)
+		if err != nil || info == nil || info.Name == "" {
+			continue
+		}
+		// Control-plane tools don't belong in a workflow tool node:
+		// AgentTool overlaps the dedicated `agent` node, SendMessage /
+		// TaskStop steer a live coordinator session, ToolSearch is an
+		// LLM-only schema-fetch affordance. Hide them from the palette.
+		if isControlPlaneTool(info.Name) {
+			continue
+		}
+		// cloud_bash blocks on synchronous human approval (HLD-021); an
+		// automated flow run has no approver, so the node would just hang
+		// until timeout. It belongs in chat — hide it from the flow palette
+		// until flow-level approval exists.
+		if info.Name == "cloud_bash" {
+			continue
+		}
+		out = append(out, managerbizflow.ToolMeta{
+			Name:          info.Name,
+			DisplayZh:     flowToolLabelZh(info.Name),
+			Description:   info.Description,
+			DescriptionZh: flowToolDescZh(info.Name),
+			WhenToUse:     info.WhenToUse,
+			Class:         info.Class,
+			Category:      categorizeFlowTool(info.Name),
+			Parameters:    info.Parameters,
+		})
+	}
+	// Live MCP tools (HLD-018) — queried fresh per editor load so adding /
+	// removing a server is reflected without a restart.
+	if c.mcp != nil {
+		out = append(out, c.mcp.metas(ctx)...)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Category != out[j].Category {
+			return out[i].Category < out[j].Category
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// isControlPlaneTool reports whether a tool is the coordinator's
+// sub-agent control surface — excluded from the workflow palette. Names
+// are the registered (CamelCase) forms.
+func isControlPlaneTool(name string) bool {
+	switch name {
+	case "AgentTool", "SendMessage", "TaskStop", "ToolSearch":
+		return true
+	}
+	return false
+}
+
+// categorizeFlowTool buckets a tool name into a palette group. Explicit
+// map for the hand-written tools, prefix rules for the families; unknown
+// names fall to "other" so the palette never drops a tool.
+func categorizeFlowTool(name string) string {
+	switch name {
+	case "correlate_incident", "get_incident_detail", "query_incidents", "query_alert_rules":
+		return "incident"
+	case "get_edge_summary", "query_devices", "query_edges", "query_change_events", "rank_edges", "find_outlier_edges":
+		return "sre"
+	case "get_topology", "find_topology_node", "expand_topology":
+		return "topology"
+	case "query_knowledge", "list_repo_sources", "read_source", "grep_source":
+		return "knowledge"
+	case "list_database_sources", "analyze_database_status":
+		return "observability"
+	case "agent_tool", "send_message", "task_stop", "tool_search":
+		return "control"
+	}
+	switch {
+	case strings.HasPrefix(name, "mcp__"):
+		return "integration" // MCP server tools (HLD-018)
+	case strings.HasPrefix(name, "query_"):
+		return "observability"
+	case strings.HasPrefix(name, "host_") || strings.HasPrefix(name, "get_host_") || strings.Contains(name, "restart_service"):
+		return "host"
+	case strings.Contains(name, "topology"):
+		return "topology"
+	case strings.Contains(name, "incident") || strings.Contains(name, "alert"):
+		return "incident"
+	case strings.Contains(name, "source") || strings.Contains(name, "knowledge"):
+		return "knowledge"
+	default:
+		return "other"
+	}
+}
+
+// flowToolLabelZh maps a tool wire name to its Chinese display label for
+// the canvas palette. Single source of truth (the tools register here in
+// main.go, so the zh names live next to them rather than drifting in the
+// frontend). Unmapped tools fall back to the wire name.
+var flowToolLabelZhMap = map[string]string{
+	// observability
+	"query_promql":            "查询指标 (PromQL)",
+	"query_logql":             "查询日志 (LogQL)",
+	"query_traceql":           "查询链路 (TraceQL)",
+	"list_database_sources":   "列出数据库源",
+	"analyze_database_status": "数据库健康分析",
+	// host
+	"host_bash":            "主机命令",
+	"host_restart_service": "重启服务",
+	"get_host_load":        "主机负载",
+	"get_host_processes":   "进程列表",
+	// topology
+	"get_topology":       "拓扑全图",
+	"find_topology_node": "查找拓扑节点",
+	"expand_topology":    "拓扑爆炸半径",
+	// incident
+	"correlate_incident":  "关联事件证据",
+	"get_incident_detail": "事件详情",
+	"query_incidents":     "查询事件",
+	"query_alert_rules":   "查询告警规则",
+	// sre
+	"get_edge_summary":    "边端概览",
+	"query_devices":       "查询设备",
+	"query_change_events": "查询变更事件",
+	"rank_edges":          "边端排名",
+	"find_outlier_edges":  "离群边端",
+	// knowledge
+	"query_knowledge":   "知识库检索",
+	"list_repo_sources": "列出代码仓",
+	"read_source":       "读源码",
+	"grep_source":       "搜源码",
+}
+
+func flowToolLabelZh(name string) string {
+	if zh, ok := flowToolLabelZhMap[name]; ok {
+		return zh
+	}
+	return name
+}
+
+// flowToolDescZhMap is the Chinese one-line description per tool, shown in
+// the palette + config drawer when the UI is in zh-CN. Same single-source
+// rationale as flowToolLabelZhMap. Unmapped → empty (frontend falls back
+// to the English Description).
+var flowToolDescZhMap = map[string]string{
+	"query_promql":            "用 PromQL 查询指标时序数据。",
+	"query_logql":             "用 LogQL 查询 Loki 日志。",
+	"query_traceql":           "用 TraceQL 查询 Tempo 链路。",
+	"list_database_sources":   "列出已发现的数据库指标采集源。",
+	"analyze_database_status": "对数据库指标源做健康巡检（连接/慢查/复制等）。",
+	"host_bash":               "在边端主机上执行受白名单约束的只读命令。",
+	"host_restart_service":    "重启白名单内的 systemd 服务（写操作，走二审）。",
+	"get_host_load":           "获取主机 CPU / 内存 / 负载快照。",
+	"get_host_processes":      "获取主机 Top 进程列表。",
+	"get_topology":            "拉取业务拓扑全图（节点 + 关系）。",
+	"find_topology_node":      "按名称搜索拓扑节点。",
+	"expand_topology":         "从某节点 BFS 扩散，算故障爆炸半径。",
+	"correlate_incident":      "围绕某事件融合 指标 + 日志 + 链路 证据。",
+	"get_incident_detail":     "获取单条事件详情。",
+	"query_incidents":         "查询事件列表。",
+	"query_alert_rules":       "查询告警规则。",
+	"get_edge_summary":        "按边端聚合健康概览。",
+	"query_devices":           "查询设备 / 边端清单。",
+	"query_change_events":     "查询某时刻附近的变更事件（审计）。",
+	"rank_edges":              "按某个 PromQL 指标给边端排名。",
+	"find_outlier_edges":      "基于统计找出离群边端。",
+	"query_knowledge":         "在 playbook + 代码仓里做语义检索。",
+	"list_repo_sources":       "列出已注册的代码仓来源。",
+	"read_source":             "读取代码仓里的源文件。",
+	"grep_source":             "在代码仓里 grep 搜索。",
+}
+
+func flowToolDescZh(name string) string {
+	return flowToolDescZhMap[name]

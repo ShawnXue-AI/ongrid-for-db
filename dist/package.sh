@@ -378,8 +378,15 @@ if ! docker image inspect "${WEB_REF}" >/dev/null 2>&1; then
 fi
 docker save "${WEB_REF}" -o "${STAGE_DIR}/images/ongrid-web.tar"
 
-# --- edge binaries (all four targets) ---------------------------------------
-for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+# --- edge binaries -----------------------------------------------------------
+# Edges are amd64-only in our deployments (the user's directive), so we ship a
+# single edge arch regardless of the manager package's TARGET_ARCH (manager is
+# per-arch: separate amd64 / arm64 packages; edge plugins are not). This is the
+# big size win — otelcol-contrib alone is ~290M PER arch, so not shipping arm64
+# + darwin edge binaries cuts ~500M from the tarball. Override EDGE_TARGETS to
+# bundle more edge arches (e.g. "linux-amd64 linux-arm64").
+EDGE_TARGETS="${EDGE_TARGETS:-linux-amd64}"
+for target in ${EDGE_TARGETS}; do
     src="${REPO_ROOT}/bin/${target}/ongrid-edge"
     dst="${STAGE_DIR}/edge/ongrid-edge-${target}"
     if [ -f "$src" ]; then
@@ -394,7 +401,7 @@ done
 # --- bundled plugin binaries (ADR-015) --------------------------------------
 # promtail (logs plugin) ships next to ongrid-edge so install-edge.sh can
 # install it under /usr/local/lib/ongrid-edge/promtail.
-for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+for target in ${EDGE_TARGETS}; do
     src="${REPO_ROOT}/bin/${target}/promtail"
     dst="${STAGE_DIR}/edge/promtail-${target}"
     if [ -f "$src" ]; then
@@ -410,7 +417,7 @@ done
 # install-edge.sh can install it under /usr/local/lib/ongrid-edge/otelcol-contrib.
 # Linux-only: upstream doesn't publish darwin builds in the contrib stream;
 # darwin edges will see the traces plugin disabled (warned by install-edge.sh).
-for target in linux-amd64 linux-arm64; do
+for target in ${EDGE_TARGETS}; do
     src="${REPO_ROOT}/bin/${target}/otelcol-contrib"
     dst="${STAGE_DIR}/edge/otelcol-contrib-${target}"
     if [ -f "$src" ]; then
@@ -427,7 +434,7 @@ done
 # node_exporter on the host. Without this, fresh installs land without
 # a metric source and Monitor stays empty until an operator manually
 # installs node_exporter.
-for target in linux-amd64 linux-arm64; do
+for target in ${EDGE_TARGETS}; do
     src="${REPO_ROOT}/bin/${target}/node_exporter"
     dst="${STAGE_DIR}/edge/node_exporter-${target}"
     if [ -f "$src" ]; then
@@ -442,7 +449,7 @@ done
 # process-exporter (per-process metrics — backs the "Top N processes
 # timeline" PromQL panel). Same systemd-managed deploy model as
 # node_exporter. Without this, the process timeline panel stays empty.
-for target in linux-amd64 linux-arm64; do
+for target in ${EDGE_TARGETS}; do
     src="${REPO_ROOT}/bin/${target}/process_exporter"
     dst="${STAGE_DIR}/edge/process_exporter-${target}"
     if [ -f "$src" ]; then
@@ -457,7 +464,7 @@ done
 # Database exporters for the databasemetrics plugin. These are edge-managed
 # subprocesses; the manager stores only the edge-local secret file path.
 for exporter in mysqld_exporter postgres_exporter redis_exporter mongodb_exporter; do
-    for target in linux-amd64 linux-arm64; do
+    for target in ${EDGE_TARGETS}; do
         src="${REPO_ROOT}/bin/${target}/${exporter}"
         dst="${STAGE_DIR}/edge/${exporter}-${target}"
         if [ -f "$src" ]; then

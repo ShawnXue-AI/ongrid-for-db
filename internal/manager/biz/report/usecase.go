@@ -215,7 +215,9 @@ func (u *Usecase) FireSchedule(ctx context.Context, s *model.ReportSchedule, fir
 // GenerateNow creates an ad-hoc report not bound to a schedule (manual
 // "generate now", API PR-4). scheduleID is nil so the dedup unique key
 // doesn't apply — every manual trigger produces a fresh row.
-func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, scopeJSON, locale string, period Period) (*model.Report, error) {
+// taskRef is the owning-task back-ref (HLD-022), e.g. "report-schedule:42" when
+// invoked via a schedule's run-now; "" for a truly ad-hoc generate.
+func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, scopeJSON, locale, taskRef string, period Period) (*model.Report, error) {
 	if _, err := loadLocation(tz); err != nil {
 		return nil, err
 	}
@@ -228,6 +230,8 @@ func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, s
 	rpt := &model.Report{
 		ID:          u.idGen(),
 		ScheduleID:  nil,
+		TaskID:      taskRef,
+		RunID:       u.idGen(), // each run-now / manual generate is its own run
 		CreatedBy:   createdBy,
 		Title:       TitleFor(kind, period, locale),
 		Kind:        kind,
@@ -254,6 +258,8 @@ func (u *Usecase) buildPendingReport(s *model.ReportSchedule, p Period) *model.R
 	return &model.Report{
 		ID:          u.idGen(),
 		ScheduleID:  &id,
+		TaskID:      fmt.Sprintf("report-schedule:%d", id),
+		RunID:       u.idGen(), // each cron fire is its own run
 		CreatedBy:   s.CreatedBy,
 		Title:       TitleFor(s.Kind, p, u.defaultLocale),
 		Kind:        s.Kind,

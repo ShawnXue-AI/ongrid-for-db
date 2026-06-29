@@ -47,8 +47,13 @@ export async function request<T = unknown>(
 
   let payload: BodyInit | undefined;
   if (body !== undefined && body !== null) {
-    headers['Content-Type'] = 'application/json';
-    payload = JSON.stringify(body);
+    if (body instanceof FormData) {
+      // Let the browser set multipart/form-data + boundary; don't JSON it.
+      payload = body;
+    } else {
+      headers['Content-Type'] = 'application/json';
+      payload = JSON.stringify(body);
+    }
   }
 
   const url = path.startsWith('http') ? path : `${BASE}${path.startsWith('/') ? path : `/${path}`}`;

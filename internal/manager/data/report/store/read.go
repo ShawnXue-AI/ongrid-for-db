@@ -23,6 +23,12 @@ func (r *Repo) ListReports(ctx context.Context, f bizreport.ReportFilter) ([]*mo
 	if f.Kind != "" {
 		q = q.Where("kind = ?", f.Kind)
 	}
+	if f.ScheduleID != nil {
+		q = q.Where("schedule_id = ?", *f.ScheduleID)
+	}
+	if f.TaskID != "" {
+		q = q.Where("task_id = ?", f.TaskID)
+	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = bizreport.DefaultListLimit

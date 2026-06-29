@@ -7,11 +7,13 @@ import { PageHeader } from '@/components/ui';
 import {
   getMessages,
   listModels,
+  stopSession,
   streamMessage,
   type ChatMessage,
   type LLMProvider,
   type Mention,
 } from '@/api/chat';
+import { listApprovals, type Approval } from '@/api/approvals';
 import { invalidateChatSessions, useChatSessions } from '@/store/chatSessions';
 import { usePermissions } from '@/store/me';
 import { useModelSelection } from '@/store/modelSelection';
@@ -38,6 +40,9 @@ export default function ChatThreadPage() {
   const [loading, setLoading] = useState(true);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const sentInitialRef = useRef(false);
+  // abortRef holds the in-flight turn's AbortController so Esc can cancel the
+  // stream client-side (instant UI) alongside the server-side stop call.
+  const abortRef = useRef<AbortController | null>(null);
   // stickToBottomRef tracks whether new messages should auto-scroll the
   // viewport down. Default true (fresh thread starts at bottom); flips
   // to false when the user manually scrolls up to read older context,
@@ -113,20 +118,37 @@ export default function ChatThreadPage() {
     const fingerprintRef = { current: '' };
     const refetch = (initial: boolean) => {
       if (initial) setLoading(true);
-      getMessages(sessionId)
-        .then((r) => {
+      Promise.all([
+        getMessages(sessionId),
+        // HLD-021: a turn can be blocked server-side waiting on a human
+        // approval. The live approve/reject card is driven by an SSE frame
+        // that's gone after a refresh, so reconstruct it from the inbox —
+        // any still-pending cloud_bash approval for THIS session is rendered
+        // as a card again so the user can decide. Non-admins 403 here → []
+        // (the inbox is admin-gated; the card just won't reappear for them).
+        listApprovals('pending').catch(() => ({ items: [] as Approval[] })),
+      ])
+        .then(([r, ap]) => {
           if (cancelled) return;
           if (!initial && submittingRef.current) return;
           const items = r.items ?? [];
+          const pending = (ap.items ?? []).filter(
+            (a) => a.session_id === sessionId && a.kind === 'cloud_bash',
+          );
+          const merged = pending.length
+            ? [...items, ...pending.map(approvalCardMessage)]
+            : items;
           // Cheap content fingerprint — length + last id + last content
-          // hash. Avoids JSON.stringify on every poll. False negatives
-          // are fine (we re-render unnecessarily once) but a tight
-          // fingerprint prevents the steady-state "every-5s rerender".
+          // hash + the pending-approval id set. Avoids JSON.stringify on
+          // every poll. False negatives are fine (we re-render unnecessarily
+          // once) but a tight fingerprint prevents the steady-state rerender.
           const last = items[items.length - 1];
-          const fp = `${items.length}|${last?.id ?? ''}|${last?.content?.length ?? 0}`;
+          const fp = `${items.length}|${last?.id ?? ''}|${last?.content?.length ?? 0}|${pending
+            .map((a) => a.id)
+            .join(',')}`;
           if (!initial && fp === fingerprintRef.current) return;
           fingerprintRef.current = fp;
-          setMessages(items);
+          setMessages(merged);
         })
         .catch(() => {
           if (cancelled || !initial) return;
@@ -200,6 +222,8 @@ export default function ChatThreadPage() {
     if (!sessionId || !content.trim()) return false;
     setError(null);
     setSubmitting(true);
+    const ac = new AbortController();
+    abortRef.current = ac;
     let expectedToolSeen = !opts.expectedTool;
     let expectedToolFailed = false;
 
@@ -294,6 +318,59 @@ export default function ChatThreadPage() {
               ),
             );
           },
+          onApprovalPending: (a) => {
+            // HLD-021: cloud_bash is now blocking on a human decision. Drive
+            // the inline approve/reject card from this live frame by stamping
+            // a synthetic pending_approval result onto the tool call's
+            // existing streaming card (keyed by tool_call_id) — the same blob
+            // shape the card detection already understands, so PendingApproval
+            // Card renders in place. When the user approves, the blocked tool
+            // returns the real output and the subsequent tool_end frame
+            // replaces this blob with the actual result.
+            const blob = {
+              status: 'pending_approval',
+              approval_id: a.approval_id,
+              command: a.command,
+              credentials: a.credentials,
+            };
+            const args = a.command ? { command: a.command } : undefined;
+            setMessages((prev) => {
+              const targetId = a.tool_call_id ? toolCardId(a.tool_call_id) : '';
+              const idx = targetId ? prev.findIndex((m) => m.id === targetId) : -1;
+              if (idx >= 0) {
+                const next = [...prev];
+                const m = next[idx];
+                next[idx] = {
+                  ...m,
+                  tool_call: {
+                    id: a.tool_call_id,
+                    name: m.tool_call?.name ?? 'cloud_bash',
+                    status: 'pending',
+                    arguments: m.tool_call?.arguments ?? args,
+                    result: blob,
+                  },
+                };
+                return next;
+              }
+              // Fallback (no tool card to merge into, e.g. legacy kernel with
+              // no tool_call_id): append a standalone approval card.
+              return [
+                ...prev,
+                {
+                  id: `approval-${a.approval_id}`,
+                  role: 'tool',
+                  kind: 'tool_card',
+                  tool_call: {
+                    id: a.tool_call_id,
+                    name: 'cloud_bash',
+                    status: 'pending',
+                    arguments: args,
+                    result: blob,
+                  },
+                },
+              ];
+            });
+          },
           onDone: () => {
             invalidateChatSessions();
           },
@@ -308,9 +385,16 @@ export default function ChatThreadPage() {
           webSearchEnabled,
           locale,
         },
+        ac.signal,
       );
       return expectedToolSeen && !expectedToolFailed;
     } catch (err) {
+      // Esc / stop aborts the fetch — that's an intentional stop, not an
+      // error. Leave the partial conversation as-is (the server persisted it);
+      // the history poll reconciles the final state.
+      if (ac.signal.aborted || (err as Error).name === 'AbortError') {
+        return false;
+      }
       const msg = (err as Error).message || tr('请求失败', 'Request failed');
       setError(msg);
       setMessages((prev) => [
@@ -325,8 +409,24 @@ export default function ChatThreadPage() {
       return false;
     } finally {
       setSubmitting(false);
+      if (abortRef.current === ac) abortRef.current = null;
     }
   }
+
+  // Esc interrupts the in-flight turn. The turn is detached from the request
+  // ctx server-side (so a refresh doesn't kill it), so we must explicitly tell
+  // the server to stop (stopSession) AND abort the local stream for an instant
+  // UI. Only acts while a turn is running; ignored otherwise so Esc keeps its
+  // normal behavior (closing menus, blurring inputs).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || !submittingRef.current || !sessionId) return;
+      void stopSession(sessionId).catch(() => {});
+      abortRef.current?.abort();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sessionId]);
 
   function confirmConfigDraft(draft: ConfigDraftResult): Promise<boolean> {
     if (submitting) return Promise.resolve(false);
@@ -347,6 +447,9 @@ export default function ChatThreadPage() {
           <span className="inline-block h-1 w-1 animate-pulse-dot rounded-full bg-zinc-500" style={{ animationDelay: '0.4s' }} />
         </span>
         <span>{tr('正在分析…', 'Analyzing…')}</span>
+        <span className="text-zinc-700">·</span>
+        <kbd className="rounded border border-zinc-700 px-1 text-[10px] text-zinc-500">Esc</kbd>
+        <span className="text-zinc-600">{tr('停止', 'stop')}</span>
       </div>
     );
   }
@@ -357,6 +460,49 @@ export default function ChatThreadPage() {
   function toolCardId(toolCallId: string): string {
     return `tool-card-${toolCallId}`;
   }
+
+  // approvalCardMessage rebuilds a pending cloud_bash approval (from the
+  // inbox) into the same synthetic tool card the live SSE path renders, so a
+  // user who refreshed mid-wait still sees approve/reject. PendingApprovalCard
+  // self-reconciles via getApproval, so a since-decided one resolves cleanly.
+  function approvalCardMessage(a: Approval): ChatMessage {
+    let command = '';
+    let credentials: string[] = [];
+    try {
+      const p = JSON.parse(a.payload) as { command?: string; credentials?: string[] };
+      command = p.command ?? '';
+      credentials = Array.isArray(p.credentials) ? p.credentials.filter(Boolean) : [];
+    } catch {
+      /* payload not JSON — card recovers command via getApproval on mount */
+    }
+    return {
+      id: `approval-${a.id}`,
+      role: 'tool',
+      kind: 'tool_card',
+      tool_call: {
+        id: a.id,
+        name: 'cloud_bash',
+        status: 'pending',
+        arguments: command ? { command } : undefined,
+        result: { status: 'pending_approval', approval_id: a.id, command, credentials },
+      },
+    };
+  }
+
+  // True while a cloud_bash approval card is on screen awaiting the user's
+  // decision (its tool card still carries the synthetic pending_approval
+  // blob). Once approved/rejected the blocked tool returns and tool_end
+  // replaces the blob, so this flips back to false and the normal thinking
+  // indicator resumes for the continuation.
+  const awaitingApproval =
+    submitting &&
+    messages.some(
+      (m) =>
+        m.kind === 'tool_card' &&
+        m.tool_call?.result != null &&
+        typeof m.tool_call.result === 'object' &&
+        (m.tool_call.result as { status?: string }).status === 'pending_approval',
+    );
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
@@ -386,7 +532,18 @@ export default function ChatThreadPage() {
                 />
               ))
             )}
-            {submitting && <ThinkingIndicator />}
+            {submitting &&
+              (awaitingApproval ? (
+                // HLD-021: cloud_bash blocks server-side while it waits for the
+                // user's approve/reject, so the turn is still "in flight" — but
+                // it isn't thinking, it's waiting on the human. Show that
+                // instead of a misleading "Analyzing…" spinner next to the card.
+                <div className="flex items-center gap-2 text-[11px] text-zinc-600">
+                  <span>{tr('等待你确认…', 'Waiting for your confirmation…')}</span>
+                </div>
+              ) : (
+                <ThinkingIndicator />
+              ))}
             {error && (
               <div
                 role="alert"
@@ -415,7 +572,7 @@ export default function ChatThreadPage() {
               onSubmit={(p: SubmitPayload) => void send(p.text, p.mentions)}
               disabled={submitting}
               autoFocus
-              placeholder={tr('继续聊…  按 ⌘↵ 换行', 'Continue the conversation… press ⌘↵ for newline')}
+              placeholder={tr('继续聊…  Shift+Enter 换行', 'Continue the conversation… Shift+Enter for newline')}
               providers={providers}
               selectedModel={selectedModel}
               onModelChange={setStoreModel}

@@ -353,7 +353,7 @@ export default function KnowledgePage() {
                   ? tr(`在「${activePath}」内检索（同 query_knowledge 工具）`, `Search within "${activePath}" (same as the query_knowledge tool)`)
                   : tr('试搜：LLM 看到的命中结果（同 query_knowledge 工具）', "Try a search — see what the LLM would (same as query_knowledge tool)")
               }
-              className="w-full rounded-md border border-zinc-800/60 bg-zinc-950/40 py-1.5 pl-8 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-700 focus:outline-none"
+              className="w-full rounded-md border border-zinc-800/60 bg-zinc-950/40 py-1.5 pl-8 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
             />
           </label>
           <button

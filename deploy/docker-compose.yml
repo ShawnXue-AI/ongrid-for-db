@@ -64,6 +64,8 @@ services:
       ONGRID_DB_DIALECT: ${ONGRID_DB_DIALECT:-mysql}
       ONGRID_DB_DSN: ${ONGRID_DB_DSN:-ongrid:ongrid@tcp(mysql:3306)/ongrid?parseTime=true&charset=utf8mb4&loc=Local}
       ONGRID_JWT_SECRET: ${ONGRID_JWT_SECRET:-change-me-to-a-long-random-string}
+      # HLD-017 credential vault at-rest key (AES-256-GCM); set 32+ random chars.
+      ONGRID_SECRET_KEY: ${ONGRID_SECRET_KEY:-}
       ONGRID_JWT_ACCESS_TTL: ${ONGRID_JWT_ACCESS_TTL:-15m}
       ONGRID_JWT_REFRESH_TTL: ${ONGRID_JWT_REFRESH_TTL:-168h}
       ONGRID_OPENAI_API_KEY: ${ONGRID_OPENAI_API_KEY:-}
@@ -96,6 +98,9 @@ services:
       ONGRID_EMBEDDING_BASE_URL: ${ONGRID_EMBEDDING_BASE_URL:-}
       ONGRID_EMBEDDING_API_KEY: ${ONGRID_EMBEDDING_API_KEY:-}
       ONGRID_EMBEDDING_CACHE_DIR: ${ONGRID_EMBEDDING_CACHE_DIR:-/var/lib/ongrid/embeddings}
+      # Optional pip index mirror for cloud_bash runtime tool installs (empty =
+      # pypi). Set to a regional mirror where pypi.org is slow.
+      ONGRID_PIP_INDEX_URL: ${ONGRID_PIP_INDEX_URL:-}
       ONNX_PATH: /usr/lib/libonnxruntime.so
       # Embedded Grafana first-boot integration. The manager uses the
       # dev-only admin creds below to create an ongrid Service Account +
@@ -156,6 +161,15 @@ services:
       # via /edge/<name>.
       - ./edge:/usr/share/ongrid/edge-bundles:ro
       - ../.cache/embedding-models:/var/lib/ongrid/embeddings
+      # HLD-017 cloud skill marketplace: persist user-installed skills so
+      # they survive container recreation (bind-mount, not container layer).
+      - ../.cache/ongrid-skills:/var/lib/ongrid/skills
+      # HLD-019 agent workspace: per-session persistent cwd for cloud_bash.
+      - ../.cache/ongrid-workspace:/var/lib/ongrid/workspace
+      # cloud_bash tools: host-mounted PYTHONUSERBASE + <dir>/bin on PATH, so
+      # CLIs the agent installs (tccli, awscli, …) persist on the host across
+      # container recreation instead of being baked into the image.
+      - ../.cache/ongrid-tools:/var/lib/ongrid/tools
     # ADR-008: HTTP API (8080) is no longer published to host in the
     # production-shape stack — nginx fronts it on 443/80. Metrics port
     # 9100 stays exposed for the host's Prometheus.

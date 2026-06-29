@@ -14,6 +14,7 @@ type Repo interface {
 	GetByManifestSHA(ctx context.Context, tenantID uint64, sha string) (*model.InstalledPack, error)
 	List(ctx context.Context, tenantID uint64) ([]*model.InstalledPack, error)
 	DeleteSoft(ctx context.Context, tenantID uint64, packID string) error
+	SetBindings(ctx context.Context, tenantID uint64, packID, bindingsJSON string) error
 }
 
 // SkillRegistry is the narrow surface the usecase uses to hot-reload
@@ -98,8 +99,21 @@ type SkillCapabilityRecord struct {
 // RequiresRecord mirrors chatruntime.Requires but with empty slices
 // elided in JSON for smaller wire payloads.
 type RequiresRecord struct {
-	Bins   []string `json:"bins,omitempty"`
-	Config []string `json:"config,omitempty"`
+	Bins        []string               `json:"bins,omitempty"`
+	Config      []string               `json:"config,omitempty"`
+	Credentials []CredentialSlotRecord `json:"credentials,omitempty"`
+}
+
+// CredentialSlotRecord is one credential slot a skill declares
+// (chatruntime.CredentialRequirement), normalised for the binding UI. The
+// inject template is intentionally dropped — the operator only needs the
+// slot key, a label, and the expected field names to pick which stored
+// credential fills the slot; injection itself is resolved server-side at
+// exec time from the bound credential's TYPE.
+type CredentialSlotRecord struct {
+	Slot   string   `json:"slot"`
+	Label  string   `json:"label"`
+	Fields []string `json:"fields,omitempty"`
 }
 
 // CapabilitySummary is the deduped union of every Skill's
@@ -109,6 +123,10 @@ type CapabilitySummary struct {
 	ToolClasses []string `json:"tool_classes,omitempty"`
 	Bins        []string `json:"bins,omitempty"`
 	ConfigKeys  []string `json:"config_keys,omitempty"`
+	// CredentialSlots is the deduped set of credential slots across all
+	// skills — the binding dialog renders one "pick a credential" row per
+	// slot here.
+	CredentialSlots []CredentialSlotRecord `json:"credential_slots,omitempty"`
 }
 
 // InstallResult is what Install returns to the HTTP handler. The SPA

@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Server,
   Boxes,
+  AppWindow,
   Database,
   Network,
   Bot,
@@ -18,8 +19,9 @@ import {
   UsersRound,
   ChartLine,
   FileText,
-  FileBarChart,
+  CalendarClock,
   Waypoints,
+  Route,
   Siren,
   Wrench,
   BookOpen,
@@ -29,7 +31,7 @@ import {
   Pencil,
   Trash2,
   Share2,
-  ArrowUpCircle,
+  Plug,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { AgentBadge } from './AgentBadge';
@@ -46,9 +48,6 @@ import { useMe, usePermissions } from '@/store/me';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
 import { deleteSession, renameSession, type ChatSession } from '@/api/chat';
 import { listEdges, type EdgeRole } from '@/api/edges';
-import { listDatabases } from '@/api/databases';
-import { getManagerVersion } from '@/api/version';
-import { checkSystemUpgrade } from '@/api/systemUpgrade';
 import { onDevicesChanged } from '@/lib/events';
 
 export function Sidebar() {
@@ -72,47 +71,8 @@ export function Sidebar() {
   const [showAllSessions, setShowAllSessions] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [managerVersion, setManagerVersion] = useState('');
-  const managerVersionLabel = managerVersion.trim();
-  const [upgradeAvailable, setUpgradeAvailable] = useState<{ latestVersion: string } | null>(null);
-  const canCheckUpgrade = role === 'admin' || isAdmin;
-
-  useEffect(() => {
-    let cancelled = false;
-    void getManagerVersion()
-      .then((r) => {
-        if (!cancelled) setManagerVersion((r.manager_version || '').trim());
-      })
-      .catch(() => {
-        if (!cancelled) setManagerVersion('');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!canCheckUpgrade || !managerVersionLabel) {
-      setUpgradeAvailable(null);
-      return;
-    }
-    let cancelled = false;
-    void checkSystemUpgrade()
-      .then((info) => {
-        if (cancelled) return;
-        if (info.comparison_supported && info.update_available) {
-          setUpgradeAvailable({ latestVersion: info.latest_version });
-          return;
-        }
-        setUpgradeAvailable(null);
-      })
-      .catch(() => {
-        if (!cancelled) setUpgradeAvailable(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canCheckUpgrade, managerVersionLabel]);
+  // Version + upgrade check moved to Settings → About / Upgrade (the brand mark
+  // stays clean), so the sidebar no longer fetches version here.
 
   // Roles actually present in the user's fleet — drives which 设备 sub-
   // items appear. We don't render a role link for a role with 0 devices,
@@ -283,11 +243,7 @@ export function Sidebar() {
           type="button"
           onClick={toggleSidebar}
           aria-label={tr('展开侧边栏', 'Expand sidebar')}
-          title={
-            managerVersionLabel
-              ? tr(`Ongrid · 当前版本 ${managerVersionLabel} · 点击展开`, `Ongrid · ${managerVersionLabel} · click to expand`)
-              : tr('Ongrid · 点击展开', 'Ongrid · click to expand')
-          }
+          title={tr('Ongrid · 点击展开', 'Ongrid · click to expand')}
           className="rounded-lg p-1 hover:bg-zinc-800/60"
         >
           <OngridLogo size={34} />
@@ -388,33 +344,10 @@ export function Sidebar() {
         >
           <OngridLogo size={32} className="-mr-0.5 shrink-0" />
           <span className="text-[16px] font-semibold tracking-tight text-zinc-100">Ongrid</span>
-          {managerVersionLabel ? (
-            <span
-              className="ml-1 max-w-[78px] shrink-0 truncate rounded-full border border-zinc-700/70 bg-zinc-800/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-zinc-400"
-              title={tr(`当前版本：${managerVersionLabel}`, `Current version: ${managerVersionLabel}`)}
-              aria-label={tr(`当前版本：${managerVersionLabel}`, `Current version: ${managerVersionLabel}`)}
-            >
-              {managerVersionLabel}
-            </span>
-          ) : null}
+          {/* Version moved to Settings → About (the brand mark stays clean). */}
         </Link>
-        {upgradeAvailable ? (
-          <Link
-            to="/settings/upgrade"
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/45 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium leading-none text-emerald-700 transition hover:border-emerald-500/70 hover:bg-emerald-100 hover:text-emerald-800 focus:outline-none focus:ring-1 focus:ring-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/15 dark:hover:text-emerald-200"
-            title={tr(
-              `发现新版本 ${upgradeAvailable.latestVersion}，点击查看升级命令`,
-              `New version ${upgradeAvailable.latestVersion} available. View upgrade commands`,
-            )}
-            aria-label={tr(
-              `发现新版本 ${upgradeAvailable.latestVersion}，打开升级页面`,
-              `New version ${upgradeAvailable.latestVersion} available. Open upgrade page`,
-            )}
-          >
-            <ArrowUpCircle size={11} />
-            <span>{tr('升级', 'Update')}</span>
-          </Link>
-        ) : null}
+        {/* Version + upgrade CTA moved to Settings → About / Upgrade — the brand
+            mark stays clean. */}
       </div>
 
       {/* user / collapse / bell */}
@@ -482,7 +415,9 @@ export function Sidebar() {
         <SectionLabel>Agent</SectionLabel>
         <NavSection>
           <SidebarNavItem to="/agents" icon={Bot} label={tr('助理', 'Assistants')} />
+          <SidebarNavItem to="/workflows" icon={Route} label={tr('工作流', 'Workflows')} />
           <SidebarNavItem to="/skills" icon={Wrench} label={tr('技能', 'Skills')} />
+          <SidebarNavItem to="/mcp" icon={Plug} label="MCP" />
         </NavSection>
 
         <SectionLabel>{tr('知识库', 'Knowledge')}</SectionLabel>
@@ -517,7 +452,11 @@ export function Sidebar() {
           <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
           <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
           <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
-          <SidebarNavItem to="/reports" icon={FileBarChart} label={tr('报告', 'Reports')} />
+        </CollapsibleSection>
+
+        <CollapsibleSection storageKey="operations" title={tr('日常', 'Daily')} defaultOpen={false}>
+          <SidebarNavItem to="/tasks" icon={CalendarClock} label={tr('任务', 'Tasks')} />
+          <SidebarNavItem to="/pages" icon={AppWindow} label={tr('产物', 'Artifacts')} />
         </CollapsibleSection>
 
         <SectionLabel>{tr('会话', 'Sessions')}</SectionLabel>

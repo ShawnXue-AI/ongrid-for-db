@@ -94,6 +94,17 @@ export function renameSession(sessionId: string, title: string) {
   );
 }
 
+// stopSession interrupts the session's in-flight turn server-side (the SPA
+// calls this on Esc). Needed because the turn is detached from the request
+// ctx (so a refresh doesn't kill it), so closing the stream alone no longer
+// cancels it — this is the explicit stop signal.
+export function stopSession(sessionId: string | number) {
+  return request<{ stopped: boolean }>(
+    'POST',
+    `/chat/sessions/${encodeURIComponent(String(sessionId))}/stop`,
+  );
+}
+
 export function getMessages(sessionId: string | number) {
   return request<{ items: ChatMessage[]; total: number }>(
     'GET',
@@ -209,10 +220,24 @@ export type ToolStreamEvent = {
   result_raw?: string;
 };
 
+// ApprovalPendingStreamEvent (HLD-021): a synchronous-blocking tool
+// (cloud_bash) has queued a human-approval proposal and is now blocking on
+// the decision. The frontend renders the inline approve/reject card live
+// from this frame — the tool no longer returns a pending_approval result
+// blob (it blocks, then returns the real command output). tool_call_id ties
+// the card to the tool call's existing streaming card so a single card shows.
+export type ApprovalPendingStreamEvent = {
+  approval_id: string;
+  tool_call_id?: string;
+  command?: string;
+  credentials?: string[];
+};
+
 export type StreamCallbacks = {
   onAssistant?: (e: AssistantStreamEvent) => void;
   onToolStart?: (e: ToolStreamEvent) => void;
   onToolEnd?: (e: ToolStreamEvent) => void;
+  onApprovalPending?: (e: ApprovalPendingStreamEvent) => void;
   onDone?: (reply: PostMessageResponse) => void;
   onError?: (err: Error) => void;
 };
@@ -314,6 +339,9 @@ function dispatchFrame(raw: string, cbs: StreamCallbacks) {
       break;
     case 'tool_end':
       cbs.onToolEnd?.(payload as ToolStreamEvent);
+      break;
+    case 'approval_pending':
+      cbs.onApprovalPending?.(payload as ApprovalPendingStreamEvent);
       break;
     case 'done':
       cbs.onDone?.(payload as PostMessageResponse);

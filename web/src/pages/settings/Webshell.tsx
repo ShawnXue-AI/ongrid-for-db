@@ -270,7 +270,7 @@ export default function SettingsWebshell() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={tr('搜索 用户 / 设备 / SSH 用户 / 终止原因', 'Search user / device / SSH user / reason')}
-                className="w-full rounded-md border border-zinc-800/60 bg-zinc-950/40 py-1.5 pl-3 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-700 focus:outline-none"
+                className="w-full rounded-md border border-zinc-800/60 bg-zinc-950/40 py-1.5 pl-3 pr-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
               />
             </label>
             {(search || statusFilter !== 'all') && (

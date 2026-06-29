@@ -126,8 +126,21 @@ func makeHandler(sandbox *cmdpolicy.Sandbox, log *slog.Logger) tunnel.Handler {
 			callCtx = cctx
 		}
 
-		log.Debug("bash: exec invoked", slog.String("cmd", req.Cmd))
-		res, err := sandbox.Exec(callCtx, req.Cmd)
+		log.Debug("bash: exec invoked", slog.String("cmd", req.Cmd), slog.Bool("unrestricted", req.Unrestricted))
+		var (
+			res *cmdpolicy.ShellResult
+			err error
+		)
+		if req.Unrestricted {
+			// Admin write gate is ON: bypass cmdpolicy and run the raw
+			// command through a shell. Log at WARN so the edge journal has a
+			// clear audit trail of every privileged command (the manager
+			// only sets this when the operator turned the gate on).
+			log.Warn("bash: UNRESTRICTED exec (cmdpolicy bypassed — write gate on)", slog.String("cmd", req.Cmd))
+			res, err = sandbox.ExecRaw(callCtx, req.Cmd)
+		} else {
+			res, err = sandbox.Exec(callCtx, req.Cmd)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("bash: exec: %w", err)
 		}

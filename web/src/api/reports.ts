@@ -17,6 +17,8 @@ export type ReportListItem = {
   period_end: string;
   generated_at?: string;
   created_at: string;
+  schedule_id?: number; // cron dedup key; absent for run-now/manual reports
+  task_id?: string; // owning-task back-ref (HLD-022), e.g. 'report-schedule:42'; set on scheduled + run-now
 };
 
 // --- ContentJSON shapes (mirror biz/report/content.go) ---
@@ -158,10 +160,12 @@ export type ScheduleInput = {
 
 // --- reports ---
 
-export function listReports(params?: { status?: string; kind?: string; limit?: number; offset?: number }) {
+export function listReports(params?: { status?: string; kind?: string; schedule_id?: number; task_id?: string; limit?: number; offset?: number }) {
   const q = new URLSearchParams();
   if (params?.status) q.set('status', params.status);
   if (params?.kind) q.set('kind', params.kind);
+  if (params?.schedule_id != null) q.set('schedule_id', String(params.schedule_id));
+  if (params?.task_id) q.set('task_id', params.task_id);
   if (params?.limit) q.set('limit', String(params.limit));
   if (params?.offset) q.set('offset', String(params.offset));
   const qs = q.toString();

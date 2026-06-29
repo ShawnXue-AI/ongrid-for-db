@@ -395,7 +395,7 @@ function TypeCard({
       )}
 
       <div className="mt-5 flex flex-wrap items-center gap-3">
-        <Button onClick={onAdd} variant="subtle">
+        <Button onClick={onAdd} variant="primary">
           <Plus size={14} />
           <span>{tr('新建', 'New')}</span>
         </Button>

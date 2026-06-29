@@ -103,6 +103,53 @@ type Requires struct {
 	// Config lists settings keys that must be filled by an admin before
 	// the skill can run (e.g. ["accountsPath"]). Lands in system_settings.
 	Config []string `yaml:"config" json:"config"`
+
+	// Credentials declares the credential SLOTS this skill needs and HOW
+	// each one's fields inject into the skill's exec environment (HLD-017,
+	// the env/file analog of n8n's credential `authenticate`). A per-skill
+	// BINDING (installed_skills.bindings) picks WHICH stored credential
+	// fills each slot; at exec ongrid resolves the {{field}} templates from
+	// that credential's fields. ongrid stays semantics-agnostic — the skill
+	// author owns the mapping, the operator owns the choice.
+	Credentials []CredentialRequirement `yaml:"credentials" json:"credentials"`
+}
+
+// CredentialRequirement is one credential slot declared by a skill/MCP.
+type CredentialRequirement struct {
+	// Slot is the logical key the binding references (e.g. "tencentcloud").
+	// Unique within the skill.
+	Slot string `yaml:"slot" json:"slot"`
+
+	// Label is the human display name for the binding UI.
+	Label string `yaml:"label" json:"label"`
+
+	// Fields lists the field names this slot expects in the bound
+	// credential (e.g. ["secret_id","secret_key","region"]) — drives the
+	// "missing field" check and the create-credential hint.
+	Fields []string `yaml:"fields" json:"fields"`
+
+	// Inject is the declarative mapping of the credential's fields into
+	// the skill's exec environment.
+	Inject CredentialInject `yaml:"inject" json:"inject"`
+}
+
+// CredentialInject declares where a slot's fields go at exec time. Each
+// value is a template over the bound credential's fields ("{{secret_id}}").
+type CredentialInject struct {
+	// Env maps ENV_VAR_NAME -> "{{field}}" template.
+	Env map[string]string `yaml:"env" json:"env"`
+
+	// Files materializes a templated blob into a file before exec (removed
+	// after) — for tools that read a credentials file (~/.aws/credentials,
+	// kubeconfig) rather than env vars.
+	Files []CredentialFile `yaml:"files" json:"files"`
+}
+
+// CredentialFile is one credential file to materialize for a skill run.
+type CredentialFile struct {
+	Path    string `yaml:"path" json:"path"`       // target path in the skill's exec dir
+	Content string `yaml:"content" json:"content"` // template over the credential fields
+	Mode    string `yaml:"mode" json:"mode"`       // octal perms, default "0600"
 }
 
 // OngridExt is the ongrid-private extension subtree under metadata.ongrid.

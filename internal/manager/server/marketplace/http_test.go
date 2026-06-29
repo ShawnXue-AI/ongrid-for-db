@@ -38,6 +38,9 @@ func (s stubSvc) Uninstall(ctx context.Context, c bizmp.Caller, packID string) e
 func (s stubSvc) Registries(ctx context.Context, c bizmp.Caller) bizmp.AllowedRegistries {
 	return s.registries(ctx, c)
 }
+func (s stubSvc) SetBindings(ctx context.Context, c bizmp.Caller, packID string, bindings map[string]string) error {
+	return nil
+}
 
 func newRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()

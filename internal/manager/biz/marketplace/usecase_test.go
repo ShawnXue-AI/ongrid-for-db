@@ -113,6 +113,19 @@ func (r *fakeRepo) DeleteSoft(_ context.Context, tenantID uint64, packID string)
 	return errs.ErrNotFound
 }
 
+func (r *fakeRepo) SetBindings(_ context.Context, tenantID uint64, packID, bindingsJSON string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, row := range r.rows {
+		if row.DeletedAt == nil && row.TenantID == tenantID && row.PackID == packID {
+			row.BindingsJSON = bindingsJSON
+			return nil
+		}
+	}
+	return errs.ErrNotFound
+}
+
+
 // ----- in-memory registries -------------------------------------------
 
 type fakeSkillReg struct {

@@ -24,6 +24,7 @@ tools:
   - query_promql
   - query_logql
   - get_edge_summary
+  - cloud_bash
 permission_mode: read-only
 max_turns: 15
 ---

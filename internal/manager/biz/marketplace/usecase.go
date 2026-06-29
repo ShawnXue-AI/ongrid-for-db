@@ -231,6 +231,10 @@ func (uc *Usecase) Install(ctx context.Context, caller Caller, src Source) (*Ins
 		return nil, err
 	}
 
+	// (Reinstall after uninstall is handled upstream now: the InstalledPack
+	// soft-delete marker is part of idx_tenant_pack, so a soft-deleted row no
+	// longer occupies the live (tenant_id, pack_id) slot — Create just works.)
+
 	// 7. Move staging → install path. We use a rename when the staging
 	//    + install root sit on the same fs; fall back to a copy + RemoveAll
 	//    when rename fails (cross-fs / dev container layouts).
@@ -391,6 +395,85 @@ func (uc *Usecase) Uninstall(ctx context.Context, caller Caller, packID string) 
 		slog.String("install_path", row.InstallPath),
 	)
 	return nil
+}
+
+// SetBindings persists the operator's slot→credential choices for an
+// installed pack (HLD-017 credential binding). bindings maps a credential
+// slot declared by the pack's skills (requires.credentials[].slot) to a
+// stored vault credential NAME. Admin-only; replaces the whole map.
+func (uc *Usecase) SetBindings(ctx context.Context, caller Caller, packID string, bindings map[string]string) error {
+	if !caller.IsAdmin() {
+		return fmt.Errorf("%w: setting credential bindings requires admin role", errs.ErrForbidden)
+	}
+	if packID == "" {
+		return fmt.Errorf("%w: pack_id required", errs.ErrInvalid)
+	}
+	clean := map[string]string{}
+	for slot, cred := range bindings {
+		slot, cred = strings.TrimSpace(slot), strings.TrimSpace(cred)
+		if slot != "" && cred != "" {
+			clean[slot] = cred
+		}
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return err
+	}
+	return uc.repo.SetBindings(ctx, caller.TenantID, packID, string(b))
+}
+
+// BoundCredentialNamesForSkills returns the vault credential names bound to
+// any installed pack that ships one of the given (active) skill names
+// (HLD-017 design-time binding). The chat runtime calls this each turn with
+// the session's active skills and injects the result for cloud_bash. The
+// binding's KEY (declared slot vs manual "extra:") is irrelevant here — every
+// associated credential is injected by its own TYPE rule at exec. Best-effort:
+// unparsable rows are skipped; single-tenant (lists all). Satisfies
+// chatruntime.CredentialBinder structurally.
+func (uc *Usecase) BoundCredentialNamesForSkills(ctx context.Context, skillNames []string) []string {
+	if len(skillNames) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(skillNames))
+	for _, n := range skillNames {
+		want[n] = true
+	}
+	packs, err := uc.repo.List(ctx, 0) // single-tenant: every pack
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range packs {
+		if strings.TrimSpace(p.BindingsJSON) == "" {
+			continue
+		}
+		var caps CapabilityDeclaration
+		if err := json.Unmarshal([]byte(p.CapabilitiesJSON), &caps); err != nil {
+			continue
+		}
+		ships := false
+		for _, s := range caps.Skills {
+			if want[s.Name] {
+				ships = true
+				break
+			}
+		}
+		if !ships {
+			continue
+		}
+		var binds map[string]string
+		if err := json.Unmarshal([]byte(p.BindingsJSON), &binds); err != nil {
+			continue
+		}
+		for _, cred := range binds {
+			if cred != "" && !seen[cred] {
+				seen[cred] = true
+				out = append(out, cred)
+			}
+		}
+	}
+	return out
 }
 
 // AllowedRegistries is what the GET /v1/marketplace/registries
@@ -678,15 +761,35 @@ func buildCapabilityDeclaration(packID, version string, res *chatruntime.LoadRes
 	classSet := map[string]bool{}
 	binSet := map[string]bool{}
 	cfgSet := map[string]bool{}
+	// Credential slots dedupe across skills by slot key, preserving first
+	// occurrence (so the binding dialog shows one row per slot).
+	credSeen := map[string]bool{}
 
 	for _, sk := range res.Skills {
+		creds := make([]CredentialSlotRecord, 0, len(sk.Metadata.Requires.Credentials))
+		for _, c := range sk.Metadata.Requires.Credentials {
+			if c.Slot == "" {
+				continue
+			}
+			slot := CredentialSlotRecord{
+				Slot:   c.Slot,
+				Label:  c.Label,
+				Fields: append([]string(nil), c.Fields...),
+			}
+			creds = append(creds, slot)
+			if !credSeen[c.Slot] {
+				credSeen[c.Slot] = true
+				caps.Summary.CredentialSlots = append(caps.Summary.CredentialSlots, slot)
+			}
+		}
 		rec := SkillCapabilityRecord{
 			Name:             sk.Name,
 			Scope:            sk.Metadata.Ongrid.Scope,
 			EdgeCapabilities: sk.Metadata.Ongrid.EdgeCapabilities,
 			Requires: RequiresRecord{
-				Bins:   append([]string(nil), sk.Metadata.Requires.Bins...),
-				Config: append([]string(nil), sk.Metadata.Requires.Config...),
+				Bins:        append([]string(nil), sk.Metadata.Requires.Bins...),
+				Config:      append([]string(nil), sk.Metadata.Requires.Config...),
+				Credentials: creds,
 			},
 		}
 		if rec.Scope == "" {

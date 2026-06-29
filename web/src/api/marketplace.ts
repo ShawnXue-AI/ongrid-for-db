@@ -30,11 +30,19 @@ export interface InstallSource {
   version?: string;
 }
 
+/** One credential slot a skill declares (requires.credentials[]). The
+ *  binding dialog renders one "pick a credential" row per slot. */
+export interface CredentialSlotRecord {
+  slot: string;
+  label: string;
+  fields?: string[];
+}
+
 export interface SkillCapabilityRecord {
   name: string;
   scope: 'manager' | 'edge';
   edge_capabilities?: Array<Record<string, unknown>>;
-  requires: { bins?: string[]; config?: string[] };
+  requires: { bins?: string[]; config?: string[]; credentials?: CredentialSlotRecord[] };
   tool_classes: string[];
 }
 
@@ -49,6 +57,7 @@ export interface CapabilityDeclaration {
     tool_classes?: string[];
     bins?: string[];
     config_keys?: string[];
+    credential_slots?: CredentialSlotRecord[];
   };
 }
 
@@ -74,6 +83,8 @@ export interface InstalledPack {
   manifest_sha256: string;
   signature_state: SignatureState | string;
   capabilities: CapabilityDeclaration | null;
+  /** operator's slot→credential-name choices (HLD-017). Empty until bound. */
+  bindings: Record<string, string>;
   installed_by: number;
   installed_at: string;
   updated_at: string;
@@ -122,6 +133,9 @@ type RawInstalledPack = {
   CapabilitiesJSON?: string;
   capabilities_json?: string;
   capabilities?: CapabilityDeclaration | null;
+  BindingsJSON?: string;
+  bindings_json?: string;
+  bindings?: Record<string, string>;
   InstalledBy?: number;
   installed_by?: number;
   InstalledAt?: string;
@@ -150,6 +164,18 @@ function parseCapabilities(raw: RawInstalledPack): CapabilityDeclaration | null 
   }
 }
 
+function parseBindings(raw: RawInstalledPack): Record<string, string> {
+  if (raw.bindings && typeof raw.bindings === 'object') return raw.bindings;
+  const json = raw.BindingsJSON ?? raw.bindings_json;
+  if (!json) return {};
+  try {
+    const o = JSON.parse(json) as Record<string, string>;
+    return o && typeof o === 'object' ? o : {};
+  } catch {
+    return {};
+  }
+}
+
 function normalisePack(raw: RawInstalledPack): InstalledPack {
   return {
     id: pick(raw.id, raw.ID) ?? 0,
@@ -162,6 +188,7 @@ function normalisePack(raw: RawInstalledPack): InstalledPack {
     manifest_sha256: pick(raw.manifest_sha256, raw.ManifestSHA256) ?? '',
     signature_state: pick(raw.signature_state, raw.SignatureState) ?? 'unsigned',
     capabilities: parseCapabilities(raw),
+    bindings: parseBindings(raw),
     installed_by: pick(raw.installed_by, raw.InstalledBy) ?? 0,
     installed_at: pick(raw.installed_at, raw.InstalledAt) ?? '',
     updated_at: pick(raw.updated_at, raw.UpdatedAt) ?? '',
@@ -198,6 +225,38 @@ export async function installPack(src: InstallSource): Promise<InstallResponse> 
   const caps = raw.capabilities ?? raw.Capabilities;
   if (!pack || !caps) {
     throw new Error('install response missing pack/capabilities');
+  }
+  return {
+    pack: normalisePack(pack),
+    capabilities: caps,
+    warnings: raw.warnings ?? raw.Warnings ?? [],
+  };
+}
+
+/** Persist the operator's slot→credential-name choices for an installed
+ *  pack (HLD-017 design-time credential binding). Replaces the whole map;
+ *  pass {} to clear. Admin-only on the backend. */
+export async function setPackBindings(
+  packId: string,
+  bindings: Record<string, string>,
+): Promise<void> {
+  await request<{ ok: boolean }>(
+    'PUT',
+    `/marketplace/installed/${encodeURIComponent(packId)}/bindings`,
+    { bindings },
+  );
+}
+
+/** Install a pack from a browser file upload (zip / tar.gz). The archive is
+ *  extracted server-side and installed like a local-dir install. Admin-only. */
+export async function uploadPack(file: File): Promise<InstallResponse> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const raw = await request<InstallRawResp>('POST', '/marketplace/upload', fd);
+  const pack = raw.pack ?? raw.Pack;
+  const caps = raw.capabilities ?? raw.Capabilities;
+  if (!pack || !caps) {
+    throw new Error('upload response missing pack/capabilities');
   }
   return {
     pack: normalisePack(pack),

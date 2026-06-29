@@ -85,6 +85,14 @@ type InstalledPack struct {
 	// skill in the pack. JSON-encoded biz/marketplace.CapabilityDeclaration.
 	CapabilitiesJSON string `gorm:"type:text"`
 
+	// BindingsJSON maps each credential SLOT a pack's skills declare
+	// (requires.credentials[].slot) to the NAME of a stored vault credential
+	// — the operator's "which credential fills this slot" choice (HLD-017).
+	// JSON object {slot: credential_name}; empty until bound. At skill exec
+	// ongrid resolves the slot's declared inject mapping against the bound
+	// credential's fields.
+	BindingsJSON string `gorm:"type:text"`
+
 	// InstalledBy is the user_id (tenantctx.Tenant.UserID) who ran the install.
 	InstalledBy uint64 `gorm:"not null;default:0"`
 

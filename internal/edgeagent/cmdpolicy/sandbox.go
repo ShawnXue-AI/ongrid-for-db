@@ -187,6 +187,76 @@ func (s *Sandbox) Exec(ctx context.Context, cmd string) (*ShellResult, error) {
 	}, nil
 }
 
+// ExecRaw runs cmd through /bin/sh -c, BYPASSING every cmdpolicy check —
+// the binary allowlist, the denied-class list, the path/network allowlists
+// and the shell-metacharacter grammar are ALL skipped, so redirects, &&, |,
+// $(), backticks etc. work and the command runs with the edge agent's full
+// privileges. This is the admin write-gate escape hatch
+// (BashExecRequest.Unrestricted): the manager only asks for it when the
+// operator has turned on "allow Agent write actions". The output caps + the
+// per-call timeout still apply so a runaway command can't park a tunnel slot
+// or flood the LLM. Path/allowlist safety is intentionally NOT enforced here
+// — bypassing it is the whole point of the gate.
+func (s *Sandbox) ExecRaw(ctx context.Context, cmd string) (*ShellResult, error) {
+	if s == nil || s.Policy == nil {
+		return &ShellResult{Allowed: false, Reason: "cmdpolicy: sandbox not configured"}, nil
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return &ShellResult{Allowed: false, Reason: "cmdpolicy: empty command"}, nil
+	}
+	timeout := s.Policy.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	start := time.Now()
+
+	c := exec.CommandContext(cctx, "/bin/sh", "-c", cmd)
+	c.Env = []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/sbin:/usr/bin:/bin",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+	}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	outW := &capWriter{buf: &bytes.Buffer{}, cap: s.Policy.StdoutCap}
+	errW := &capWriter{buf: &bytes.Buffer{}, cap: s.Policy.StderrCap}
+	c.Stdout = outW
+	c.Stderr = errW
+
+	runErr := c.Run()
+	dur := time.Since(start)
+	trunc := capHit(outW) || capHit(errW)
+
+	if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+		return &ShellResult{
+			Allowed: true, Stdout: outW.buf.String(), Stderr: "cmdpolicy: command timed out",
+			ExitCode: -1, Truncated: trunc, DurationMs: dur.Milliseconds(),
+		}, nil
+	}
+	exitCode := 0
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		} else {
+			// OS-level startup failure (e.g. /bin/sh missing).
+			return &ShellResult{
+				Allowed: true, Stdout: outW.buf.String(), Stderr: runErr.Error(),
+				ExitCode: -1, Truncated: trunc, DurationMs: dur.Milliseconds(),
+			}, nil
+		}
+	}
+	return &ShellResult{
+		Allowed: true, Stdout: outW.buf.String(), Stderr: errW.buf.String(),
+		ExitCode: exitCode, Truncated: trunc, DurationMs: dur.Milliseconds(),
+	}, nil
+}
+
+// capHit reports whether a capWriter reached its cap (output truncated).
+func capHit(w *capWriter) bool {
+	return w != nil && w.cap > 0 && w.buf.Len() >= w.cap
+}
+
 // runPipeline wires the segments through stdin/stdout pipes and runs
 // them. Returns (stdout, stderr, exitCode, truncated, err). err is
 // non-nil only for OS-level startup failures.

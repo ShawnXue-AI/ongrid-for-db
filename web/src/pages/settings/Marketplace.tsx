@@ -12,12 +12,14 @@ import {
   PlugZap,
   RefreshCw,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { useAuth } from '@/store/auth';
 import { ApiError } from '@/api/client';
 import {
   classifyError,
   installPack,
+  uploadPack,
   listInstalledPacks,
   uninstallPack,
   type CapabilityDeclaration,
@@ -30,6 +32,7 @@ import {
 } from '@/api/marketplace';
 import { Modal } from '@/components/Modal';
 import { CapabilitySummaryView } from '@/components/marketplace/CapabilitySummary';
+import { CredentialBindings } from '@/components/marketplace/CredentialBindings';
 import { SignatureBadge } from '@/components/marketplace/SignatureBadge';
 import { Button, Card, Chip, EmptyState } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -109,6 +112,26 @@ export default function SettingsMarketplace() {
     [isAdmin, refresh],
   );
 
+  const handleUpload = useCallback(
+    async (file: File) => {
+      if (!isAdmin) {
+        setToast({ kind: 'err', text: tr('需要 admin 权限才能安装', 'Admin permission required to install') });
+        return;
+      }
+      setInstalling(true);
+      try {
+        const resp = await uploadPack(file);
+        setConfirm(resp);
+        void refresh();
+      } catch (e) {
+        setToast({ kind: 'err', text: errorToast(e, 'install') });
+      } finally {
+        setInstalling(false);
+      }
+    },
+    [isAdmin, refresh],
+  );
+
   const handleUninstall = useCallback(
     async (packId: string, opts?: { silent?: boolean }) => {
       if (!isAdmin) {
@@ -147,6 +170,7 @@ export default function SettingsMarketplace() {
       <InstallCard
         installing={installing}
         onInstall={handleInstall}
+        onUpload={handleUpload}
         isAdmin={isAdmin}
       />
 
@@ -243,6 +267,7 @@ function InstalledList({
               expanded={!!expanded[p.pack_id]}
               onToggle={() => onToggleExpand(p.pack_id)}
               onUninstall={() => onUninstall(p)}
+              onReload={onRefresh}
               isAdmin={isAdmin}
             />
           ))}
@@ -257,12 +282,14 @@ function PackRow({
   expanded,
   onToggle,
   onUninstall,
+  onReload,
   isAdmin,
 }: {
   pack: InstalledPack;
   expanded: boolean;
   onToggle: () => void;
   onUninstall: () => void;
+  onReload: () => void;
   isAdmin: boolean;
 }) {
   const { tr } = useI18n();
@@ -317,6 +344,7 @@ function PackRow({
               {tr('该包没有保存能力声明（旧版安装或解析失败）', 'This pack has no stored capability declaration (legacy install or parse failure)')}
             </div>
           )}
+          <CredentialBindings pack={pack} isAdmin={isAdmin} onSaved={onReload} />
         </div>
       )}
 
@@ -405,7 +433,8 @@ function Meta({
 // 注册表入口暂时下架（运营 / 用户都看不懂；也明确"等首批客户
 // 上规模再启动 ongrid-official"）。后端 SourceTypeRegistry 保留，未来恢复
 // 只需把 'registry' 加回这个 list 即可。
-const TABS: Array<{ key: SourceType; labelZh: string; labelEn: string; icon: IconType }> = [
+const TABS: Array<{ key: SourceType | 'upload'; labelZh: string; labelEn: string; icon: IconType }> = [
+  { key: 'upload', labelZh: '上传文件', labelEn: 'Upload', icon: Upload },
   { key: 'local', labelZh: '本地路径', labelEn: 'Local path', icon: Folder },
   { key: 'tarball', labelZh: 'Tarball URL', labelEn: 'Tarball URL', icon: Globe },
   { key: 'git', labelZh: 'Git URL', labelEn: 'Git URL', icon: GitBranch },
@@ -414,18 +443,21 @@ const TABS: Array<{ key: SourceType; labelZh: string; labelEn: string; icon: Ico
 function InstallCard({
   installing,
   onInstall,
+  onUpload,
   isAdmin,
 }: {
   installing: boolean;
   onInstall: (src: InstallSource) => void;
+  onUpload: (file: File) => void;
   isAdmin: boolean;
 }) {
   const { tr } = useI18n();
-  const [tab, setTab] = useState<SourceType>('local');
+  const [tab, setTab] = useState<SourceType | 'upload'>('upload');
   const [path, setPath] = useState('');
   const [tarballURL, setTarballURL] = useState('');
   const [gitURL, setGitURL] = useState('');
   const [gitRef, setGitRef] = useState('');
+  const [file, setFile] = useState<File | null>(null);
 
   const buildSource = useCallback((): InstallSource | null => {
     switch (tab) {
@@ -453,14 +485,18 @@ function InstallCard({
 
   const submit = () => {
     if (installing) return;
+    if (tab === 'upload') {
+      if (file) onUpload(file);
+      return;
+    }
     const src = buildSource();
     if (!src) return;
     onInstall(src);
   };
 
   const canSubmit = useMemo(
-    () => buildSource() !== null && !installing,
-    [buildSource, installing],
+    () => (tab === 'upload' ? !!file : buildSource() !== null) && !installing,
+    [tab, file, buildSource, installing],
   );
 
   return (
@@ -504,6 +540,29 @@ function InstallCard({
       </div>
 
       <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-3">
+        {tab === 'upload' && (
+          <Field
+            label={tr('技能压缩包', 'Skill archive')}
+            hint={tr(
+              '从浏览器上传一个 .zip / .tar.gz 包（含 SKILL.md 或 .claude-plugin/plugin.json）；服务端解压后按本地目录安装。',
+              'Upload a .zip / .tar.gz from your browser (containing SKILL.md or .claude-plugin/plugin.json); the server extracts and installs it.',
+            )}
+          >
+            <input
+              type="file"
+              accept=".zip,.tar.gz,.tgz,.tar"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={!isAdmin || installing}
+              className="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-zinc-200 hover:file:bg-zinc-700 disabled:opacity-50"
+            />
+            {file && (
+              <div className="mt-1.5 text-[11px] text-zinc-400">
+                {file.name} · {(file.size / 1024).toFixed(0)} KB
+              </div>
+            )}
+          </Field>
+        )}
+
         {tab === 'local' && (
           <Field
             label={tr('绝对路径', 'Absolute path')}
@@ -681,6 +740,11 @@ function ConfirmBody({
         <div className="mb-2 text-[11px] uppercase tracking-wide text-zinc-500">{tr('能力声明', 'Capability declaration')}</div>
         <CapabilitySummaryView decl={decl} warnings={warnings} />
       </div>
+
+      {/* Bind credentials right here — install requires admin, so the binder
+          is always actionable. Renders nothing when the pack declares no
+          credential slots. */}
+      <CredentialBindings pack={pack} isAdmin />
 
       <p className="text-[11px] text-zinc-500">
         {tr('包已落盘 + 入库；点「完成」保留，点「回滚卸载」立即移除。', 'Pack is on disk and in the DB. Click Done to keep it, or Roll back to remove it immediately.')}

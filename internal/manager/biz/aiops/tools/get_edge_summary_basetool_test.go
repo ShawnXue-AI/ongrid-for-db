@@ -100,11 +100,15 @@ func TestGetEdgeSummaryTool_BadArgs(t *testing.T) {
 	if _, err := tool.InvokableRun(context.Background(), `not json`); err == nil {
 		t.Errorf("expected error for non-JSON")
 	}
-	if _, err := tool.InvokableRun(context.Background(), `{}`); err == nil {
-		t.Errorf("expected error for missing device_ids")
+	// Missing / empty device_ids now means "summarize all edges" (no error).
+	// With an empty fake fleet this returns a valid empty envelope.
+	if out, err := tool.InvokableRun(context.Background(), `{}`); err != nil {
+		t.Errorf("missing device_ids should be all-edges mode, got err: %v", err)
+	} else if !strings.Contains(out, `"results"`) {
+		t.Errorf("expected envelope for all-edges mode, got: %s", out)
 	}
-	if _, err := tool.InvokableRun(context.Background(), `{"device_ids":[]}`); err == nil {
-		t.Errorf("expected error for empty device_ids")
+	if _, err := tool.InvokableRun(context.Background(), `{"device_ids":[]}`); err != nil {
+		t.Errorf("empty device_ids should be all-edges mode, got err: %v", err)
 	}
 }
 

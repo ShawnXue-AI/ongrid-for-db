@@ -445,7 +445,14 @@ if [[ -d "$SCRIPT_DIR/edge" ]]; then
     # upgrade until the next install, so warn and continue.
     _edge_ver=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION" 2>/dev/null || true)
     if [[ -x "$INSTALL_DIR/edge/build-edge-bundle.sh" && -n "$_edge_ver" ]]; then
-        for _edge_arch in linux-amd64 linux-arm64; do
+        # Build a bundle only for the edge arch(es) actually staged. The package
+        # may ship amd64-only (see EDGE_TARGETS in package.sh / EDGE_PLUGIN_ARCHES
+        # in the Makefile), so we glob the present ongrid-edge-linux-* binaries
+        # instead of assuming both arches — otherwise the host-side rebuild warns
+        # loudly about the arm64 binaries we deliberately didn't ship.
+        for _edge_bin in "$INSTALL_DIR"/edge/ongrid-edge-linux-*; do
+            [[ -f "$_edge_bin" ]] || continue   # no-match glob stays literal; skip
+            _edge_arch="${_edge_bin##*/ongrid-edge-}"   # ongrid-edge-linux-amd64 -> linux-amd64
             "$INSTALL_DIR/edge/build-edge-bundle.sh" "$INSTALL_DIR/edge" "$_edge_ver" "$_edge_arch" \
                 || log_warn "edge upgrade bundle rebuild failed for $_edge_arch; one-button edge upgrade disabled for that arch until next install"
         done
@@ -496,6 +503,10 @@ mkdir -p \
     "$ONGRID_DATA_DIR/qdrant" \
     "$ONGRID_DATA_DIR/grafana" \
     "$ONGRID_DATA_DIR/embeddings" \
+    "$ONGRID_DATA_DIR/skills" \
+    "$ONGRID_DATA_DIR/pages" \
+    "$ONGRID_DATA_DIR/workspace" \
+    "$ONGRID_DATA_DIR/tools" \
     "$ONGRID_LOG_DIR"
 
 # Stage the bundled fastembed model (ADR-027 Phase-2 offline RAG).
@@ -515,6 +526,17 @@ fi
 # write its own progress / lock files on first load.
 chmod -R 0755 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
 chown -R 65532:65532 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
+# HLD-017 marketplace skills dir — manager (uid 65532) installs packs here;
+# must be writable by that uid (cf. embeddings). Without this a fresh install
+# fails at "move staging → install: permission denied".
+chown -R 65532:65532 "$ONGRID_DATA_DIR/skills" 2>/dev/null || true
+# Manager-written runtime dirs (uid 65532), all bind-mounted into the container.
+# Without chown, docker creates them root-owned on first `up` and the nonroot
+# manager can't write: serve_page fails "mkdir page dir: permission denied",
+# cloud_bash fails "mkdir session" (workspace) + can't install tools.
+chown -R 65532:65532 "$ONGRID_DATA_DIR/pages" 2>/dev/null || true
+chown -R 65532:65532 "$ONGRID_DATA_DIR/workspace" 2>/dev/null || true
+chown -R 65532:65532 "$ONGRID_DATA_DIR/tools" 2>/dev/null || true
 
 # Image uids — pinned to what the upstream images run as. Bumping the
 # image tag in docker-compose.yml without updating these here will fail

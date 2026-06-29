@@ -236,7 +236,7 @@ function NodesTab({ isAdmin }: { isAdmin: boolean }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={tr('按 name 搜索', 'Search by name')}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-900/40 py-1.5 pl-7 pr-2.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-700 focus:outline-none"
+              className="w-full rounded-md border border-zinc-800 bg-zinc-900/40 py-1.5 pl-7 pr-2.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
             />
           </div>
           <div className="ml-auto flex items-center gap-1.5">
@@ -672,7 +672,7 @@ function CreateNodeModal({
                 setType(e.target.value);
               }
             }}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {nodeTypes.map((nt) => (
               <option key={nt.name} value={nt.name}>
@@ -690,7 +690,7 @@ function CreateNodeModal({
                 value={newTypeName}
                 onChange={(e) => setNewTypeName(e.target.value)}
                 placeholder={tr('如 vm', 'e.g. vm')}
-                className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-700 focus:outline-none"
+                className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-600 focus:outline-none"
               />
             </Field>
             <Field label={tr('display_name（chip 上显示的中文 / i18n 标签）', 'display_name (chip label, any language)')}>
@@ -698,7 +698,7 @@ function CreateNodeModal({
                 value={newTypeDisplay}
                 onChange={(e) => setNewTypeDisplay(e.target.value)}
                 placeholder={tr('如 虚拟机', 'e.g. VM')}
-                className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+                className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
               />
             </Field>
             <Field
@@ -710,7 +710,7 @@ function CreateNodeModal({
                 onChange={(e) => setNewTypeTier(Number(e.target.value))}
                 min={0}
                 max={99}
-                className="w-24 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+                className="w-24 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
               />
             </Field>
           </div>
@@ -720,7 +720,7 @@ function CreateNodeModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={tr('比如 order-api', 'e.g. order-api')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field
@@ -731,7 +731,7 @@ function CreateNodeModal({
             value={propsText}
             onChange={(e) => setPropsText(e.target.value)}
             rows={4}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-[11px] text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-[11px] text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
       </div>
@@ -862,7 +862,7 @@ function AddRelationModal({
           <select
             value={relTypeName}
             onChange={(e) => setRelTypeName(e.target.value)}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {relTypes.map((rt) => (
               <option key={rt.name} value={rt.name}>
@@ -878,7 +878,7 @@ function AddRelationModal({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={tr('开始输入...', 'Start typing...')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
           <div className="mt-1.5 max-h-48 overflow-auto rounded-md border border-zinc-800 bg-zinc-900/40">
             {candidates.length === 0 ? (
@@ -908,7 +908,7 @@ function AddRelationModal({
             value={propsText}
             onChange={(e) => setPropsText(e.target.value)}
             rows={3}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-[11px] text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-[11px] text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
       </div>
@@ -1110,7 +1110,7 @@ function CreateNodeTypeModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={tr('如 vm / datacenter', 'e.g. vm / datacenter')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field label={tr('display_name（中文标签）', 'display_name (Chinese label)')}>
@@ -1118,7 +1118,7 @@ function CreateNodeTypeModal({
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder={tr('如 虚拟机 / 数据中心', 'e.g. 虚拟机 / 数据中心')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field label={tr('display_name_en（可选；en-US locale 下用）', 'display_name_en (optional; shown in en-US locale)')}>
@@ -1126,7 +1126,7 @@ function CreateNodeTypeModal({
             value={displayNameEN}
             onChange={(e) => setDisplayNameEN(e.target.value)}
             placeholder={tr('如 VM / Datacenter', 'e.g. VM / Datacenter')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field
@@ -1141,7 +1141,7 @@ function CreateNodeTypeModal({
             onChange={(e) => setTier(Number(e.target.value))}
             min={0}
             max={99}
-            className="w-24 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-24 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field label={tr('description（可选）', 'description (optional)')}>
@@ -1149,7 +1149,7 @@ function CreateNodeTypeModal({
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
             rows={2}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
       </div>
@@ -1382,7 +1382,7 @@ function CreateRelationTypeModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={tr('如 shares_storage_with', 'e.g. shares_storage_with')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 font-mono text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field label={tr('display_name（中文标签）', 'display_name (Chinese label)')}>
@@ -1390,7 +1390,7 @@ function CreateRelationTypeModal({
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder={tr('如 共享存储', 'e.g. 共享存储')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field label={tr('display_name_en（可选；en-US locale 下用）', 'display_name_en (optional; shown in en-US locale)')}>
@@ -1398,7 +1398,7 @@ function CreateRelationTypeModal({
             value={displayNameEN}
             onChange={(e) => setDisplayNameEN(e.target.value)}
             placeholder={tr('如 Shared storage', 'e.g. Shared storage')}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
         <Field
@@ -1408,7 +1408,7 @@ function CreateRelationTypeModal({
           <select
             value={direction}
             onChange={(e) => setDirection(e.target.value as RelationDirection)}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {RELATION_DIRECTIONS.map((d) => (
               <option key={d.value} value={d.value}>
@@ -1424,7 +1424,7 @@ function CreateRelationTypeModal({
           <select
             value={tag}
             onChange={(e) => setTag(e.target.value as SemanticsTag)}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {SEMANTICS_TAGS.map((t) => (
               <option key={t.value} value={t.value}>
@@ -1452,7 +1452,7 @@ function CreateRelationTypeModal({
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
             rows={2}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-700 focus:outline-none"
+            className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
       </div>
@@ -1601,7 +1601,7 @@ function GraphTab({ isAdmin }: { isAdmin: boolean }) {
               <select
                 value={appFocus ?? ''}
                 onChange={(e) => setAppFocus(e.target.value ? Number(e.target.value) : null)}
-                className="rounded-md border border-zinc-800 bg-zinc-900/40 px-1.5 py-1 text-[11px] text-zinc-100 focus:border-zinc-700 focus:outline-none"
+                className="rounded-md border border-zinc-800 bg-zinc-900/40 px-1.5 py-1 text-[11px] text-zinc-100 focus:border-zinc-600 focus:outline-none"
               >
                 <option value="">{tr('全部应用', 'All apps')}</option>
                 {appNodes.map((a) => (

@@ -61,6 +61,15 @@ type Investigator interface {
 	InvestigateAsync(incident *model.Incident)
 }
 
+// WorkflowDispatcher fans a newly-fired alert out to matching workflows
+// (HLD-016 trigger.alert_fired). Optional; nil-safe. Declared with plain
+// types so this package doesn't import biz/flow — flow.Dispatcher
+// implicitly satisfies it. main.go injects.
+type WorkflowDispatcher interface {
+	// OnAlertFired MUST be non-blocking (same contract as Investigator).
+	OnAlertFired(incidentID uint64, rule, severity string, edgeID, deviceID uint64, labels map[string]string, firedAt time.Time)
+}
+
 type Usecase struct {
 	repo  Repo
 	clock Clock
@@ -68,6 +77,9 @@ type Usecase struct {
 	// investigator is optional; nil-safe everywhere. main.go injects via
 	// SetInvestigator only when LLM is configured.
 	investigator Investigator
+	// workflowDispatcher is optional; nil-safe. main.go injects the flow
+	// dispatcher so a fired alert can auto-start matching workflows.
+	workflowDispatcher WorkflowDispatcher
 }
 
 func NewUsecase(repo Repo, log *slog.Logger) *Usecase {
@@ -82,6 +94,12 @@ func NewUsecase(repo Repo, log *slog.Logger) *Usecase {
 // RecordFiring nil-checks before dispatch.
 func (u *Usecase) SetInvestigator(inv Investigator) {
 	u.investigator = inv
+}
+
+// SetWorkflowDispatcher wires the alert→workflow dispatcher (HLD-016).
+// Safe to leave unset.
+func (u *Usecase) SetWorkflowDispatcher(d WorkflowDispatcher) {
+	u.workflowDispatcher = d
 }
 
 // createEvent persists an alert event row and increments the
@@ -371,16 +389,19 @@ func (u *Usecase) RecordFiring(ctx context.Context, in FiringInput) (*FiringResu
 		// Existing incident path (cold or race-recovery).
 		switch existing.Status {
 		case model.IncidentStatusResolved:
-			if err := u.repo.ReopenIncident(ctx, existing.ID, occurredAt); err != nil {
+			if err := u.repo.ReopenIncident(ctx, existing.ID, occurredAt, in.Summary, in.Value, in.Threshold); err != nil {
 				return nil, fmt.Errorf("reopen incident: %w", err)
 			}
 			existing.Status = model.IncidentStatusOpen
 			existing.SilencedUntil = nil
 			existing.ResolvedAt = nil
 			existing.ResolvedBy = nil
+			existing.Summary = in.Summary
+			existing.Value = in.Value
+			existing.Threshold = in.Threshold
 			isReopen = true
 		default:
-			if err := u.repo.BumpIncidentFiring(ctx, existing.ID, occurredAt); err != nil {
+			if err := u.repo.BumpIncidentFiring(ctx, existing.ID, occurredAt, in.Summary, in.Value, in.Threshold); err != nil {
 				return nil, fmt.Errorf("bump incident: %w", err)
 			}
 		}
@@ -426,6 +447,26 @@ func (u *Usecase) RecordFiring(ctx context.Context, in FiringInput) (*FiringResu
 	// stays off the firing-path critical timing.
 	if isNew && u.investigator != nil {
 		u.investigator.InvestigateAsync(incident)
+	}
+
+	// Workflow auto-trigger (HLD-016 trigger.alert_fired). Non-blocking like
+	// the investigator, but fires on isNew OR isReopen — unlike the
+	// investigator (which stays new-only to spare the LLM bill on flaps), a
+	// remediation workflow SHOULD run again when a resolved alert recurs.
+	// reopen requires the condition to have cleared first, so this is keyed to
+	// real recurrences, not the per-tick re-firings of a still-open incident
+	// (those take the bump path and never reach here).
+	if (isNew || isReopen) && u.workflowDispatcher != nil {
+		var devID uint64
+		if incident.DeviceID != nil {
+			devID = *incident.DeviceID
+		}
+		var labels map[string]string
+		if incident.LabelsJSON != "" {
+			_ = json.Unmarshal([]byte(incident.LabelsJSON), &labels)
+		}
+		// edge_id == device_id 1:1 post entity-split (see model comment).
+		u.workflowDispatcher.OnAlertFired(incident.ID, incident.RuleName, incident.Severity, devID, devID, labels, occurredAt)
 	}
 
 	return &FiringResult{

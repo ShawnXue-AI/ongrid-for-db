@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	model "github.com/ongridio/ongrid/internal/manager/model/report"
@@ -12,10 +13,12 @@ import (
 // ReportFilter scopes a report list query. Zero value = all reports,
 // newest first.
 type ReportFilter struct {
-	Status string // "" = any
-	Kind   string // "" = any
-	Limit  int    // 0 → DefaultListLimit
-	Offset int
+	Status     string  // "" = any
+	Kind       string  // "" = any
+	ScheduleID *uint64 // nil = any; set = only reports from this schedule
+	TaskID     string  // "" = any; set = only reports owned by this task (HLD-022)
+	Limit      int     // 0 → DefaultListLimit
+	Offset     int
 }
 
 // DefaultListLimit caps an unbounded list query.
@@ -33,6 +36,12 @@ type ReadRepo interface {
 	ListSchedules(ctx context.Context, ownerID uint64, all bool) ([]*model.ReportSchedule, error)
 	DeleteSchedule(ctx context.Context, id uint64) error
 	GetReportByShareToken(ctx context.Context, token string) (*model.Report, error)
+	// HLD-022 Phase 2 — unified-task spine (oneoff rows).
+	CreateTask(ctx context.Context, t *model.Task) error
+	GetTask(ctx context.Context, id string) (*model.Task, error)
+	ListTasks(ctx context.Context) ([]*model.Task, error)
+	UpdateTaskStatus(ctx context.Context, id, status string) error
+	DeleteTask(ctx context.Context, id string) error
 }
 
 // WithReadRepo attaches the read surface to the Usecase. The scheduler
@@ -150,7 +159,9 @@ func (u *Usecase) RunNow(ctx context.Context, scheduleID uint64, locale string, 
 	}
 	// run-now is an operator action → narrate in the operator's UI locale
 	// (Accept-Language), same as a manual generate.
-	return u.GenerateNow(ctx, s.CreatedBy, s.Kind, s.Timezone, s.ScopeJSON, locale, period)
+	// run-now reports belong to the schedule's task even though ScheduleID stays
+	// nil (dedup-key avoidance) — stamp the task back-ref so the 任务 lists them.
+	return u.GenerateNow(ctx, s.CreatedBy, s.Kind, s.Timezone, s.ScopeJSON, locale, fmt.Sprintf("report-schedule:%d", scheduleID), period)
 }
 
 // ShareReport mints (or refreshes) a 30-day share token on a report and

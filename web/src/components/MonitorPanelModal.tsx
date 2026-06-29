@@ -127,7 +127,7 @@ export function MonitorPanelModal({ open, panel, onClose, onSubmit }: MonitorPan
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={tr('如 入站流量 / 业务 QPS', 'e.g. Inbound traffic / Service QPS')}
-            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
         </Field>
 
@@ -135,7 +135,7 @@ export function MonitorPanelModal({ open, panel, onClose, onSubmit }: MonitorPan
           <select
             value={type}
             onChange={(e) => setType(e.target.value as MonitorPanelType)}
-            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {TYPE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value} className="bg-zinc-900">
@@ -156,7 +156,7 @@ export function MonitorPanelModal({ open, panel, onClose, onSubmit }: MonitorPan
                 '示例: sum by (device_id) (rate(node_network_receive_bytes_total[5m]))',
                 'e.g. sum by (device_id) (rate(node_network_receive_bytes_total[5m]))',
               )}
-              className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-[12px] text-zinc-100 focus:border-emerald-500 focus:outline-none"
+              className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-[12px] text-zinc-100 focus:border-zinc-600 focus:outline-none"
             />
             <NLQueryHelper
               dialect="promql"
@@ -188,7 +188,7 @@ export function MonitorPanelModal({ open, panel, onClose, onSubmit }: MonitorPan
             value={legend}
             onChange={(e) => setLegend(e.target.value)}
             placeholder={tr('示例: {{device_id}} / {{instance}}（留空则按 series 自动）', 'e.g. {{device_id}} / {{instance}} (empty = auto by series)')}
-            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
           />
           <p className="mt-1 text-[11px] text-zinc-500">
             {tr('支持 ', 'Supports ')}{'{{label}}'}{tr(' 占位符，与 Grafana 一致。', ' placeholder, same as Grafana.')}
@@ -199,7 +199,7 @@ export function MonitorPanelModal({ open, panel, onClose, onSubmit }: MonitorPan
           <select
             value={unit}
             onChange={(e) => setUnit(e.target.value)}
-            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
+            className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
           >
             {UNIT_OPTIONS.map((o) => (
               <option key={o.value} value={o.value} className="bg-zinc-900">

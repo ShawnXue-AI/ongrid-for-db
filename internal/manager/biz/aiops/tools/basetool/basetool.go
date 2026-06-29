@@ -90,7 +90,32 @@ type ToolInfo struct {
 	//   - "write" — mutates ongrid state (e.g. silence an alert)
 	//   - "destructive" — mutates external state (e.g. restart a service)
 	Class string
+
+	// Origin records where the tool came from, so policy can treat
+	// runtime-discovered tools differently from compiled-in builtins
+	// WITHOUT string-matching wire names (which doesn't scale as dynamic
+	// sources — MCP servers, installed skills, extensions — grow). Empty
+	// ("") = builtin, compiled in. Runtime sources set it explicitly
+	// (OriginMCP / OriginSkill). The agent loop uses it to keep dynamic
+	// tools out of the coordinator's hands — it delegates them to a
+	// specialist instead of wielding a sprawling, ever-growing set itself.
+	Origin string
 }
+
+// Tool origin codes. Empty (OriginBuiltin) is the default for compiled-in
+// BaseTools; every runtime-discovered source stamps its own code.
+const (
+	OriginBuiltin = ""      // compiled-in BaseTool
+	OriginMCP     = "mcp"   // exposed by a registered MCP server (HLD-018)
+	OriginSkill   = "skill" // contributed by an installed skill / extension
+)
+
+// IsDynamic reports whether the tool was discovered at runtime (MCP, skill,
+// …) rather than compiled in. Dynamic tools can't be pre-listed in a persona's
+// static whitelist, so callers route them to specialists rather than the
+// coordinator. New dynamic sources are covered automatically by stamping a
+// non-empty Origin — no name-prefix table to maintain.
+func (i ToolInfo) IsDynamic() bool { return i.Origin != OriginBuiltin }
 
 // InvokeOption is a functional option threaded through InvokableRun.
 // Decorators set these before calling the inner tool; tools may read

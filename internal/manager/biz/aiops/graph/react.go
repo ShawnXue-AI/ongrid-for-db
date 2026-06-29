@@ -97,6 +97,15 @@ func BuildReActGraph(
 		ToolCallingModel: model,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: baseTools,
+			// Without this, a single tool call for a name not in this node's
+			// set — a hallucinated tool, or one filtered out of a worker's
+			// persona bag — aborts the WHOLE run ("tool X not found in
+			// toolsNode indexes"). That's what crashed flow Agent nodes. Hand
+			// the model a recoverable tool-result instead so it picks a real
+			// tool (or answers directly) and the run continues.
+			UnknownToolsHandler: func(_ context.Context, name, _ string) (string, error) {
+				return fmt.Sprintf("Tool %q is not available to you. Use one of the tools provided in this conversation, or answer directly without a tool.", name), nil
+			},
 		},
 		// eino's "step" counts every graph node visit — one ReAct
 		// iteration is ChatModel + ToolsNode = 2 steps. So to give the

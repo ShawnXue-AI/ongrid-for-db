@@ -103,7 +103,21 @@ type Report struct {
 	// now". (schedule_id, period_start) UNIQUE prevents duplicate
 	// generation for the same schedule + window.
 	ScheduleID *uint64 `gorm:"column:schedule_id;uniqueIndex:uniq_report_sched_period,priority:1"`
-	CreatedBy  uint64  `gorm:"column:created_by;not null"` // schedule owner or manual trigger
+
+	// TaskID is the owning task back-ref (HLD-022), e.g. "report-schedule:42".
+	// Distinct from ScheduleID: ScheduleID drives the cron dedup unique key and
+	// is NULL for run-now/manual reports, whereas TaskID is set on BOTH
+	// scheduled and run-now reports so a task can list every artifact it
+	// produced (each report = one run with its own id). Empty = unattached.
+	TaskID string `gorm:"column:task_id;size:128;index:idx_report_task;not null;default:''"`
+
+	// RunID is the trigger/run back-ref (HLD-022 three-level model:
+	// task → run → artifact). One task fires many runs (each cron tick /
+	// run-now = a run with its own id); one run can yield several artifacts
+	// (a report + a page) that share this RunID, so a task detail can group
+	// artifacts by trigger. Empty for legacy rows.
+	RunID     string `gorm:"column:run_id;size:64;index:idx_report_run;not null;default:''"`
+	CreatedBy uint64 `gorm:"column:created_by;not null"` // schedule owner or manual trigger
 
 	Title       string    `gorm:"column:title;size:255;not null"` // "周报 · 2026 W23 (6/2–6/8)"
 	Kind        string    `gorm:"column:kind;size:16;not null"`

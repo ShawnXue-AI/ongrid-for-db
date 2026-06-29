@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { Wrench, ChevronDown, ChevronRight, Loader2, AlertCircle, CheckCircle2, ShieldAlert, Check, X, XCircle } from 'lucide-react';
 import type { ChatMessage, ToolCallSummary } from '@/api/chat';
+import { approveApproval, rejectApproval, getApproval } from '@/api/approvals';
 import { cn } from '@/lib/cn';
 import { isConfigDraftConfirmationMessage } from '@/lib/configDraftConfirmation';
 import { useI18n } from '@/i18n/locale';
@@ -158,6 +159,13 @@ function ToolCallSummaryBlock({
   const isPending = status === 'pending';
   const isError = status === 'error' || status === 'timeout' || !!call.error;
   const hint = argSummary(call.arguments);
+  // Inline approval (HLD-017): a cloud_bash / MCP tool result that returned
+  // pending_approval renders an in-conversation 批准/拒绝 card instead of a
+  // plain result blob — the human confirms right here, no inbox detour.
+  const approvalID = pendingApprovalID(call.result);
+  if (approvalID) {
+    return <PendingApprovalCard approvalID={approvalID} command={argCommandText(call.arguments)} />;
+  }
   const configDraft = !isError ? asConfigDraft(call.result) : null;
   return (
     <div
@@ -447,4 +455,184 @@ function Dot({ delay }: { delay: number }) {
       style={{ animationDelay: `${delay}s` }}
     />
   );
+}
+
+// --- HLD-017 inline approval -------------------------------------------
+
+// pendingApprovalID returns the approval id when a tool result is the
+// cloud_bash "pending_approval" envelope, else "".
+function pendingApprovalID(result: unknown): string {
+  if (result && typeof result === 'object') {
+    const r = result as Record<string, unknown>;
+    if (r.status === 'pending_approval' && typeof r.approval_id === 'string') return r.approval_id;
+  }
+  return '';
+}
+
+function argCommandText(args: unknown): string {
+  if (args && typeof args === 'object') {
+    const c = (args as Record<string, unknown>).command;
+    if (typeof c === 'string') return c;
+  }
+  return '';
+}
+
+// PendingApprovalCard renders an in-conversation approve/reject prompt for a
+// proposed cloud_bash command. Approve runs the command (the backend executor
+// runs synchronously) and shows the result inline; reject discards it.
+function PendingApprovalCard({ approvalID, command }: { approvalID: string; command: string }) {
+  const { tr } = useI18n();
+  const [state, setState] = useState<'loading' | 'idle' | 'busy' | 'done' | 'rejected' | 'error' | 'stale'>('loading');
+  const [resultText, setResultText] = useState('');
+  const [errText, setErrText] = useState('');
+  const [cmd, setCmd] = useState(command);
+  const [creds, setCreds] = useState<string[]>([]);
+
+  // Reconcile with the authoritative server status on mount. When chat
+  // history is reloaded, the persisted tool message carries only the result
+  // blob (no arguments, no live status), so a long-decided proposal would
+  // otherwise replay with dead 批准/拒绝 buttons that 404 on click ("not
+  // found"). Mirrors ztna-agent's rule: a proposal's status is read from the
+  // store on replay, never trusted from the message. The approval record
+  // also carries the payload, so we recover the command text here too (fixes
+  // the "(命令)" placeholder on the reload path).
+  useEffect(() => {
+    let alive = true;
+    getApproval(approvalID)
+      .then((a) => {
+        if (!alive) return;
+        try {
+          const p = JSON.parse(a.payload) as { command?: string; credentials?: string[] };
+          if (!cmd && p.command) setCmd(p.command);
+          if (Array.isArray(p.credentials)) setCreds(p.credentials.filter(Boolean));
+        } catch {
+          /* payload not JSON — leave placeholder */
+        }
+        if (a.status === 'executed') {
+          setState('done');
+          setResultText(a.result ?? '');
+        } else if (a.status === 'rejected') {
+          setState('rejected');
+        } else if (a.status === 'failed') {
+          setState('error');
+          setErrText(a.result ?? 'failed');
+        } else {
+          setState('idle'); // pending — offer the buttons
+        }
+      })
+      .catch(() => {
+        // Genuinely gone (404) or unreachable: never show dead buttons —
+        // point the user at the inbox instead of letting a click 404.
+        if (alive) setState('stale');
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalID]);
+
+  const approve = async () => {
+    setState('busy');
+    try {
+      const a = await approveApproval(approvalID);
+      if (a.status === 'failed') {
+        setState('error');
+        setErrText(a.result ?? 'failed');
+      } else {
+        setState('done');
+        setResultText(a.result ?? '');
+      }
+    } catch (e) {
+      setState('error');
+      setErrText((e as Error).message);
+    }
+  };
+  const reject = async () => {
+    setState('busy');
+    try {
+      await rejectApproval(approvalID, '');
+      setState('rejected');
+    } catch (e) {
+      setState('error');
+      setErrText((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="w-full overflow-hidden rounded-lg bg-zinc-900/30 text-xs ring-1 ring-zinc-800/80">
+      <div className="flex items-center gap-2 border-b border-zinc-800/60 px-3 py-2">
+        <ShieldAlert size={13} className="text-amber-500/90" />
+        <span className="font-medium text-zinc-200">{tr('需要你确认才能在云端执行', 'Needs your approval to run in the cloud')}</span>
+      </div>
+      <div className="px-3 pb-2.5">
+        <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[11px] text-zinc-300">
+          {cmd || tr('(命令)', '(command)')}
+        </pre>
+        {creds.length > 0 && (
+          <div className="mb-2 flex flex-wrap items-center gap-1 text-[11px] text-zinc-400">
+            <span>{tr('将注入凭证：', 'Injects credentials: ')}</span>
+            {creds.map((c) => (
+              <span key={c} className="rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-zinc-300 ring-1 ring-zinc-700/50">
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
+        {state === 'loading' && (
+          <div className="flex items-center gap-1.5 text-zinc-500">
+            <Loader2 size={12} className="animate-spin" />
+            {tr('加载审批状态…', 'Loading approval status…')}
+          </div>
+        )}
+        {state === 'stale' && (
+          <div className="text-zinc-500">
+            {tr('该审批已失效或已处理，请前往「待确认」页查看。', 'This approval is gone or already handled — see the Approvals page.')}
+          </div>
+        )}
+        {state === 'idle' && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void approve()}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-700 bg-emerald-950/40 px-2.5 py-1 text-emerald-300 hover:bg-emerald-900/40"
+            >
+              <Check size={12} />
+              {tr('批准并执行', 'Approve & run')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void reject()}
+              className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2.5 py-1 text-zinc-400 hover:border-red-800 hover:text-red-400"
+            >
+              <X size={12} />
+              {tr('拒绝', 'Reject')}
+            </button>
+          </div>
+        )}
+        {state === 'busy' && <div className="flex items-center gap-1.5 text-zinc-400"><Loader2 size={12} className="animate-spin" />{tr('执行中…', 'Running…')}</div>}
+        {state === 'rejected' && <div className="text-zinc-500">{tr('已拒绝，未执行', 'Rejected — not run')}</div>}
+        {state === 'error' && <div className="break-all text-red-400">{errText}</div>}
+        {state === 'done' && (
+          <div>
+            <div className="mb-1 text-emerald-400">{tr('已执行', 'Executed')}</div>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-950 p-2 text-[11px] text-zinc-300">{prettyResult(resultText)}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function prettyResult(s: string): string {
+  if (!s) return '';
+  try {
+    const o = JSON.parse(s) as Record<string, unknown>;
+    const parts: string[] = [];
+    if (o.stdout) parts.push(String(o.stdout));
+    if (o.stderr) parts.push(`[stderr] ${String(o.stderr)}`);
+    if (typeof o.exit_code === 'number') parts.push(`[exit ${o.exit_code}]`);
+    return parts.join('\n') || s;
+  } catch {
+    return s;
+  }
 }
