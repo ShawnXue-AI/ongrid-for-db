@@ -78,7 +78,7 @@ type WebshellRouter interface {
 // DBInstanceIngester upserts database instance info discovered by the
 // edge agent. *databasestore.Repo satisfies this.
 type DBInstanceIngester interface {
-	UpsertFromDiscovery(ctx context.Context, edgeID uint64, dbType, name, host string, port int, version, status, configJSON string) error
+	UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID, pluginType, dbType, name, host string, port int, version, status, configJSON string) error
 }
 
 // the edge biz PluginConfigUC. *edgebiz.PluginConfigUC satisfies it.
@@ -436,7 +436,7 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 				canonicalEdgeID := c.canonicalizeEdgeID(edgeID)
 				var hasErr bool
 				for _, inst := range in.Instances {
-					if err := w.DBInstanceIngester.UpsertFromDiscovery(rpcCtx, canonicalEdgeID, inst.DBType, inst.Name, inst.Host, inst.Port, inst.Version, inst.Status, inst.ConfigJSON); err != nil {
+					if err := w.DBInstanceIngester.UpsertFromDiscovery(rpcCtx, canonicalEdgeID, inst.SourceID, inst.PluginType, inst.DBType, inst.Name, inst.Host, inst.Port, inst.Version, inst.Status, inst.ConfigJSON); err != nil {
 						log.Warn("push_db_instance_info: upsert",
 							slog.Uint64("edge_id", canonicalEdgeID),
 							slog.String("name", inst.Name),

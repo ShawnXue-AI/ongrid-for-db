@@ -200,6 +200,7 @@ type WriteDatabaseMetricsSecretResponse struct {
 // instance on the edge. Edge sends this via MethodPushDBInstanceInfo.
 type DBInstanceInfo struct {
 	DBType      string `json:"db_type"`
+	SourceID    string `json:"source_id"`               // plugin config source.id or custommetrics target.id
 	Name        string `json:"name"`
 	Host        string `json:"host"`
 	Port        int    `json:"port"`

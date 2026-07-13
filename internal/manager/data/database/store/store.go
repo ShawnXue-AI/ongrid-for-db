@@ -133,21 +133,30 @@ func (r *Repo) Delete(ctx context.Context, id uint64) error {
 }
 
 // UpsertFromDiscovery inserts or updates a database instance reported by
-// the edge discovery component. Matches on (edge_id, name) — the unique
-// constraint from the model. When a row matches, writable fields (host,
-// port, version, status, config_json) are updated; otherwise a new row
-// is created with StatusUnknown.
+// the edge discovery component. Matches on (edge_id, source_id) when
+// source_id is set; falls back to (edge_id, name) for backwards
+// compatibility with manually-created rows. Writable fields (host, port,
+// version, status, config_json, source_id, plugin_type) are updated on
+// match; otherwise a new row is created with StatusUnknown.
 //
-// Fields: dbType, name (required), host, port, version, status, configJSON.
-func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, dbType, name, host string, port int, version, status, configJSON string) error {
+// Fields: sourceID, pluginType, dbType, name (required), host, port, version, status, configJSON.
+func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID, pluginType, dbType, name, host string, port int, version, status, configJSON string) error {
 	if name == "" || dbType == "" {
 		return errs.ErrInvalid
 	}
-	// Try to find existing row by edge_id + name.
+	// Try to find existing row by (edge_id, source_id) when source_id is set,
+	// fall back to (edge_id, name) for backwards compatibility.
 	var existing model.DatabaseInstance
-	err := r.db.WithContext(ctx).
-		Where("edge_id = ? AND name = ?", edgeID, name).
-		First(&existing).Error
+	var err error
+	if sourceID != "" {
+		err = r.db.WithContext(ctx).
+			Where("edge_id = ? AND source_id = ?", edgeID, sourceID).
+			First(&existing).Error
+	} else {
+		err = r.db.WithContext(ctx).
+			Where("edge_id = ? AND name = ?", edgeID, name).
+			First(&existing).Error
+	}
 
 	if err == nil {
 		// Update existing.

@@ -19,10 +19,17 @@ import (
 // subprocess for metrics collection.
 type DatabaseInstance struct {
 	ID      uint64 `gorm:"primaryKey;autoIncrement"`
-	EdgeID  uint64 `gorm:"not null;uniqueIndex:uk_edge_name,priority:2;column:edge_id"`
-	// Name is the operator-friendly display label. Unique per edge so
-	// operators can name their instances without collision.
-	Name    string `gorm:"size:128;not null;uniqueIndex:uk_edge_name,priority:1;column:name"`
+	EdgeID  uint64 `gorm:"not null;uniqueIndex:uk_edge_source,priority:2;column:edge_id"`
+	// Name is the operator-friendly display label.
+	Name    string `gorm:"size:128;not null;column:name"`
+	// SourceID is the stable identifier from the plugin config (databasemetrics
+	// source.id or custommetrics target.id). Unique per edge so the discovery
+	// pipeline can idempotently upsert. Manually-created instances may leave
+	// this empty — the unique constraint only applies when source_id != ''.
+	SourceID string `gorm:"size:128;not null;default:'';uniqueIndex:uk_edge_source,priority:1;column:source_id"`
+	// PluginType records which edge plugin reported this instance:
+	// "databasemetrics" or "custommetrics". Empty for manually created.
+	PluginType string `gorm:"size:32;not null;default:'';column:plugin_type"`
 	// DBType is one of: mysql, postgresql, redis, mongodb, oracle, selectdb.
 	DBType  string `gorm:"size:32;not null;column:db_type;check:db_type IN ('mysql','postgresql','redis','mongodb','oracle','selectdb')"`
 	// Host is the database server hostname or IP reachable from the edge.
