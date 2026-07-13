@@ -187,6 +187,7 @@ func (d *Discoverer) probeInstances(ctx context.Context, sources []SourceSpec) [
 		}
 		info := tunnel.DBInstanceInfo{
 			DBType:     s.DBType,
+			SourceID:   s.ID,
 			Name:       s.Name,
 			Host:       s.Host,
 			Port:       s.Port,
