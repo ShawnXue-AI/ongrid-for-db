@@ -289,7 +289,7 @@ chmod 0755 "$STATE_DIR"
 cat > "$UPGRADE_SERVICE_FILE" <<'EOF'
 [Unit]
 Description=ongrid edge pending-upgrade apply (root, pre-start)
-Documentation=ADR-024
+Documentation=file:///usr/local/lib/ongrid-edge/apply-pending-upgrade.sh
 Before=ongrid-edge.service
 After=local-fs.target
 

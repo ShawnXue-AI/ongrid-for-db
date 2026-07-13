@@ -83,12 +83,13 @@ func TestToolBag_OverThresholdSplits(t *testing.T) {
 		newStub("query_devices", ""),
 		newStub("get_topology", ""),
 		newStub("query_incidents", ""),
+		newStub("query_change_events", ""),
 		newStub("get_edge_summary", ""),
 		newStub("correlate_incident", ""),
 		newStub("AgentTool", ""),
 		newStub("SendMessage", ""),
 		newStub("TaskStop", ""),
-		// 13 core entries.
+		// 14 core entries.
 		newStub("rank_edges", ""),
 		newStub("find_outlier_edges", ""),
 		newStub("get_incident_detail", ""),
@@ -97,9 +98,9 @@ func TestToolBag_OverThresholdSplits(t *testing.T) {
 		newStub("host_du_summary", ""),
 		newStub("host_stat_file", ""),
 		newStub("host_restart_service", ""),
-		// 8 specialty entries → 21 so far.
+		// 8 specialty entries → 22 so far.
 	}
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 13; i++ {
 		in = append(in, newStub("synthetic_pack_tool_"+string(rune('a'+i)), "synthetic"))
 	}
 	if len(in) != 35 {
@@ -117,9 +118,9 @@ func TestToolBag_OverThresholdSplits(t *testing.T) {
 	}
 
 	deferred := bag.DeferredTools()
-	// 8 known specialty + 14 unknown → 22 deferred.
-	if len(deferred) != 22 {
-		t.Errorf("DeferredTools len=%d want 22", len(deferred))
+	// 8 known specialty + 13 unknown → 21 deferred.
+	if len(deferred) != 21 {
+		t.Errorf("DeferredTools len=%d want 21", len(deferred))
 	}
 
 	got := bag.SchemasForLLM()
@@ -135,11 +136,11 @@ func TestToolBag_OverThresholdSplits(t *testing.T) {
 			coreCount++
 		}
 	}
-	if coreCount != 13 {
-		t.Errorf("core (full schema) tools=%d want 13", coreCount)
+	if coreCount != 14 {
+		t.Errorf("core (full schema) tools=%d want 14", coreCount)
 	}
-	if redactedCount != 22 {
-		t.Errorf("redacted tools=%d want 22", redactedCount)
+	if redactedCount != 21 {
+		t.Errorf("redacted tools=%d want 21", redactedCount)
 	}
 }
 
@@ -255,7 +256,7 @@ func TestToolBag_AppendBucketsByTier(t *testing.T) {
 	beforeDeferred := len(bag.DeferredTools())
 
 	bag.Append(newStub("host_find_large_files", "")) // specialty
-	bag.Append(newStub("query_promql", ""))     // core
+	bag.Append(newStub("query_promql", ""))          // core
 
 	if got := len(bag.DeferredTools()); got != beforeDeferred+1 {
 		t.Errorf("expected +1 deferred, got %d (was %d)", got, beforeDeferred)
@@ -269,6 +270,29 @@ func TestToolBag_AppendBucketsByTier(t *testing.T) {
 				t.Errorf("query_promql should be core (full schema)")
 			}
 		}
+	}
+}
+
+func TestCoreToolNames_UsesRegistrationTier(t *testing.T) {
+	in := []basetool.BaseTool{
+		newStub("query_devices", ""),
+		newStub("query_traceql", ""),
+		newStub("query_knowledge", ""),
+		newStub("read_source", ""),
+		newStub("host_find_large_files", ""),
+		newStub("query_devices", "duplicate"),
+	}
+	got := CoreToolNames(in)
+	for _, want := range []string{"query_devices", "query_traceql", "query_knowledge", "read_source"} {
+		if !containsNameString(got, want) {
+			t.Errorf("CoreToolNames missing %q: %v", want, got)
+		}
+	}
+	if containsNameString(got, "host_find_large_files") {
+		t.Errorf("CoreToolNames should not include specialty tool: %v", got)
+	}
+	if countNameString(got, "query_devices") != 1 {
+		t.Errorf("CoreToolNames should de-duplicate query_devices, got %v", got)
 	}
 }
 
@@ -307,4 +331,23 @@ func containsToolName(t *testing.T, tools []basetool.BaseTool, name string) bool
 		}
 	}
 	return false
+}
+
+func containsNameString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countNameString(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
 }

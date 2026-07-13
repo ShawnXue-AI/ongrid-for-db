@@ -318,11 +318,12 @@ func (t *AgentTool) InvokableRun(ctx context.Context, argsJSON string, opts ...b
 	// stays false — see schema comment for why we don't expose async
 	// to the coordinator anymore.
 	w, err := t.spawner.SpawnWorker(ctx, SpawnWorkerRequest{
-		AgentName: args.SubagentType,
-		Prompt:    args.Prompt,
-		Locale:    basetool.LocaleFromContext(ctx),
-		Provider:  basetool.LLMProviderFromContext(ctx),
-		Model:     basetool.LLMModelFromContext(ctx),
+		AgentName:     args.SubagentType,
+		Prompt:        args.Prompt,
+		ParentSession: basetool.SessionIDFromContext(ctx),
+		Locale:        basetool.LocaleFromContext(ctx),
+		Provider:      basetool.LLMProviderFromContext(ctx),
+		Model:         basetool.LLMModelFromContext(ctx),
 	})
 	if err != nil {
 		// Clean up the dedupe placeholder on failure. Close the inFlight

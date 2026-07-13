@@ -7,7 +7,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/ongridio/ongrid)](https://goreportcard.com/report/github.com/ongridio/ongrid)
 [![Release](https://img.shields.io/github/v/release/ongridio/ongrid?logo=github&label=release&color=2563eb)](https://github.com/ongridio/ongrid/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/ongridio/ongrid?logo=go&logoColor=white&color=00ADD8)](go.mod)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?logo=apache)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-AGPLv3-blue.svg?logo=gnu)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Stack](https://img.shields.io/badge/stack-Go%20%7C%20TypeScript%20%7C%20React-1e40af?logo=react&logoColor=white)](#features)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-22c55e.svg?logo=git&logoColor=white)](CONTRIBUTING.md)
 [![Telegram](https://img.shields.io/badge/Telegram-Join-26A5E4?logo=telegram&logoColor=white)](https://t.me/ongridai)
@@ -48,15 +48,15 @@ Elige el comando para la arquitectura de tu servidor:
 
 **AMD64**
 ```bash
-wget https://github.com/ongridio/ongrid/releases/download/v0.9.0/ongrid-v0.9.0-linux-amd64.tar.xz
-tar -xf ongrid-v0.9.0-linux-amd64.tar.xz && cd ongrid-v0.9.0-linux-amd64
+wget https://github.com/ongridio/ongrid/releases/download/v0.9.1/ongrid-v0.9.1-linux-amd64.tar.xz
+tar -xf ongrid-v0.9.1-linux-amd64.tar.xz && cd ongrid-v0.9.1-linux-amd64
 sudo ./install.sh
 ```
 
 **ARM64**
 ```bash
-wget https://github.com/ongridio/ongrid/releases/download/v0.9.0/ongrid-v0.9.0-linux-arm64.tar.xz
-tar -xf ongrid-v0.9.0-linux-arm64.tar.xz && cd ongrid-v0.9.0-linux-arm64
+wget https://github.com/ongridio/ongrid/releases/download/v0.9.1/ongrid-v0.9.1-linux-arm64.tar.xz
+tar -xf ongrid-v0.9.1-linux-arm64.tar.xz && cd ongrid-v0.9.1-linux-arm64
 sudo ./install.sh
 ```
 
@@ -64,10 +64,10 @@ sudo ./install.sh
 
 ```bash
 # AMD64
-wget https://ongrid.cloud/dl/ongrid-v0.9.0-linux-amd64.tar.xz
+wget https://ongrid.cloud/dl/ongrid-v0.9.1-linux-amd64.tar.xz
 
 # ARM64
-wget https://ongrid.cloud/dl/ongrid-v0.9.0-linux-arm64.tar.xz
+wget https://ongrid.cloud/dl/ongrid-v0.9.1-linux-arm64.tar.xz
 ```
 
 ## Recorrido del producto
@@ -168,13 +168,4 @@ Se integra con los stacks de observabilidad, canales y modelos que tu equipo ya 
 
 ## Licencia
 
-Apache 2.0 — ver [LICENSE](LICENSE).
-
-## Historial de estrellas
-
-<a href="https://www.star-history.com/#ongridio/ongrid&amp;Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=ongridio/ongrid&amp;type=Date&amp;theme=dark" />
-    <img alt="Gráfico del historial de estrellas" src="https://api.star-history.com/svg?repos=ongridio/ongrid&amp;type=Date" />
-  </picture>
-</a>
+AGPLv3 — ver [LICENSE](LICENSE).
