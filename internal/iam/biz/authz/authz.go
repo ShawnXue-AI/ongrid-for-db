@@ -97,6 +97,11 @@ var rolePolicies = [][]string{
 	{iammodel.MembershipRoleMember, "*", "*", "read"},
 	{iammodel.MembershipRoleMember, "*", "*", "write"},
 	{iammodel.MembershipRoleMember, "*", "device:shell", "exec"},
+		// database instance CRUD + credential access
+		{iammodel.MembershipRoleMember, "*", "database:*", "read"},
+		{iammodel.MembershipRoleMember, "*", "database:*", "write"},
+		{iammodel.MembershipRoleMember, "*", "database:*", "delete"},
+		{iammodel.MembershipRoleMember, "*", "database:credential", "exec"},
 
 	// viewer: read only. No device:shell access — viewers see audit
 	// logs, not live shells.

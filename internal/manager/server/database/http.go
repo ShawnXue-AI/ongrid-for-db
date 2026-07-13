@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -56,12 +57,20 @@ type CredentialStore interface {
 	Delete(ctx context.Context, instanceID uint64) error
 }
 
+// AuthzMW is the narrow contract for Casbin authorization middleware.
+// *authzmw.Middleware satisfies it.
+type AuthzMW interface {
+	Require(obj, act string) func(http.Handler) http.Handler
+}
+
 // Handler wires database instance HTTP routes to the service layer.
 type Handler struct {
 	svc     Service
 	topo    TopologySyncer
 	dbQuery DBQueryExecutor
 	credDB  CredentialStore
+	authz   AuthzMW
+	logger  *slog.Logger
 }
 
 // NewHandler constructs the handler.
@@ -80,16 +89,61 @@ func (h *Handler) SetDBQueryExecutor(q DBQueryExecutor) { h.dbQuery = q }
 // rather than passed through the LLM prompt context.
 func (h *Handler) SetCredentialStore(s CredentialStore) { h.credDB = s }
 
+// SetAuthz wires the optional Casbin authorization middleware. When set,
+// mutating routes require the appropriate database:* permission.
+func (h *Handler) SetAuthz(a AuthzMW) { h.authz = a }
+
+// SetLogger wires an optional logger for structured error logging.
+func (h *Handler) SetLogger(l *slog.Logger) { h.logger = l }
+
+// writeMW returns a Casbin middleware requiring "write" on obj, or a
+// no-op passthrough when authz is not wired.
+func (h *Handler) writeMW(obj string) func(http.Handler) http.Handler {
+	if h.authz != nil {
+		return h.authz.Require(obj, "write")
+	}
+	return func(next http.Handler) http.Handler { return next }
+}
+
+// deleteMW returns a Casbin middleware requiring "delete" on obj, or a
+// no-op passthrough when authz is not wired.
+func (h *Handler) deleteMW(obj string) func(http.Handler) http.Handler {
+	if h.authz != nil {
+		return h.authz.Require(obj, "delete")
+	}
+	return func(next http.Handler) http.Handler { return next }
+}
+
+// execMW returns a Casbin middleware requiring "exec" on obj, or a
+// no-op passthrough when authz is not wired. Used for probe and
+// slow-query endpoints that change state or resolve credentials.
+func (h *Handler) execMW(obj string) func(http.Handler) http.Handler {
+	if h.authz != nil {
+		return h.authz.Require(obj, "exec")
+	}
+	return func(next http.Handler) http.Handler { return next }
+}
+
 // Register attaches routes to the given chi router (typically the protected
 // /api group in cmd/ongrid/main.go).
+//
+//	GET    /v1/databases          — list (read)
+//	POST   /v1/databases          — create (write)
+//	GET    /v1/databases/{id}     — get (read)
+//	PUT    /v1/databases/{id}     — update (write)
+//	DELETE /v1/databases/{id}     — delete (delete)
+//	POST   /v1/databases/{id}/slow-queries — slow query analysis (exec)
+//	POST   /v1/databases/{id}/probe        — connectivity probe (exec)
+//
+// @Summary Database instance management API
 func (h *Handler) Register(r chi.Router) {
-	r.Get("/v1/databases", h.list)
-	r.Post("/v1/databases", h.create)
-	r.Get("/v1/databases/{id}", h.get)
-	r.Put("/v1/databases/{id}", h.update)
-	r.Delete("/v1/databases/{id}", h.delete)
-	r.Post("/v1/databases/{id}/slow-queries", h.slowQueries)
-	r.Post("/v1/databases/{id}/probe", h.probe)
+	r.Get("/v1/databases", h.list)                                                    // read — public for authed users
+	r.With(h.writeMW("database:*")).Post("/v1/databases", h.create)                   // write
+	r.Get("/v1/databases/{id}", h.get)                                                // read — public for authed users
+	r.With(h.writeMW("database:*")).Put("/v1/databases/{id}", h.update)               // write
+	r.With(h.deleteMW("database:*")).Delete("/v1/databases/{id}", h.delete)           // delete
+	r.With(h.execMW("database:credential")).Post("/v1/databases/{id}/slow-queries", h.slowQueries) // exec
+	r.With(h.execMW("database:credential")).Post("/v1/databases/{id}/probe", h.probe) // exec
 }
 
 // --- request / response DTOs ---
@@ -133,6 +187,12 @@ type instanceResponse struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+// listResp is the JSON envelope for list endpoints.
+type listResp struct {
+	Items []instanceResponse `json:"items"`
+	Total int                `json:"total"`
+}
+
 func toResponse(inst *model.DatabaseInstance) instanceResponse {
 	return instanceResponse{
 		ID:          inst.ID,
@@ -164,7 +224,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidDBType(req.DBType) {
-		writeErr(w, fmt.Errorf("unsupported db_type %q", req.DBType))
+		writeErr(w, errors.Join(errs.ErrInvalid, fmt.Errorf("unsupported db_type %q", req.DBType)))
 		return
 	}
 	inst := &model.DatabaseInstance{
@@ -182,11 +242,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.topo != nil {
-		_ = h.topo.SyncDBInstance(r.Context(), inst)
+		if err := h.topo.SyncDBInstance(r.Context(), inst); err != nil {
+			h.logErr("topology sync failed after create", err, "id", inst.ID)
+		}
 	}
 	// Store credentials server-side (encrypted at rest) if provided.
-	if h.credDB != nil {
-		_ = h.credDB.Set(r.Context(), inst.ID, req.DBUser, req.DBPassword)
+	if h.credDB != nil && req.DBUser != "" && req.DBPassword != "" {
+		if err := h.credDB.Set(r.Context(), inst.ID, req.DBUser, req.DBPassword); err != nil {
+			h.logErr("credential store failed after create", err, "id", inst.ID)
+		}
 	}
 	writeJSON(w, http.StatusCreated, toResponse(inst))
 }
@@ -219,11 +283,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	resp := make([]instanceResponse, 0, len(instances))
+	items := make([]instanceResponse, 0, len(instances))
 	for _, inst := range instances {
-		resp = append(resp, toResponse(inst))
+		items = append(items, toResponse(inst))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, listResp{Items: items, Total: len(items)})
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +342,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	// Store credentials server-side if provided on update.
 	if h.credDB != nil && req.DBUser != "" && req.DBPassword != "" {
-		_ = h.credDB.Set(r.Context(), id, req.DBUser, req.DBPassword)
+		if err := h.credDB.Set(r.Context(), id, req.DBUser, req.DBPassword); err != nil {
+			h.logErr("credential store failed after update", err, "id", id)
+		}
 	}
 	// re-fetch to return full state
 	updated, err := h.svc.GetByID(r.Context(), id)
@@ -312,7 +378,9 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.credDB != nil {
-		_ = h.credDB.Delete(r.Context(), id)
+		if err := h.credDB.Delete(r.Context(), id); err != nil {
+			h.logErr("credential delete failed", err, "id", id)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -446,8 +514,10 @@ func (h *Handler) slowQueries(w http.ResponseWriter, r *http.Request) {
 	}
 	// Store credentials for future use (AI query_database, next slow query).
 	if h.credDB != nil {
-		_ = h.credDB.Set(r.Context(), id, req.User, req.Password)
-	}
+		if err := h.credDB.Set(r.Context(), id, req.User, req.Password); err != nil {
+				h.logErr("credential store failed", err, "id", id)
+			}
+		}
 	if req.Limit <= 0 {
 		req.Limit = 50
 	}
@@ -709,13 +779,16 @@ func float64OrZero(v any) float64 {
 }
 
 // isValidDBType checks whether dbType is one of the supported database types.
+// First release: MySQL only. Additional types will be enabled as their
+// query drivers, probe logic, and slow-query SQL are validated.
 func isValidDBType(dbType string) bool {
-	for _, t := range model.AllDBTypes() {
-		if t == dbType {
-			return true
-		}
+	return dbType == model.DBTypeMySQL
+}
+
+func (h *Handler) logErr(msg string, err error, args ...any) {
+	if h.logger != nil {
+		h.logger.Error(msg, append([]any{slog.String("error", err.Error())}, args...)...)
 	}
-	return false
 }
 
 func boolOrZero(v any) bool {
@@ -800,7 +873,9 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 
 	// Store credentials back only when we have a complete pair.
 	if h.credDB != nil && req.User != "" && req.Password != "" {
-		_ = h.credDB.Set(r.Context(), id, req.User, req.Password)
+		if err := h.credDB.Set(r.Context(), id, req.User, req.Password); err != nil {
+			h.logErr("credential store failed during probe", err, "id", id)
+		}
 	}
 
 	// Probe via the edge agent's db_ping skill.
@@ -812,7 +887,9 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		// Dispatch-level error (edge unreachable, skill not found).
 		writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = h.svc.UpdateStatus(writeCtx, id, model.StatusOffline)
+		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
+				h.logErr("failed to update status to offline", updateErr, "id", id)
+			}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  err.Error(),
@@ -825,7 +902,9 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(rawResult, &pr); err != nil {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = h.svc.UpdateStatus(writeCtx, id, model.StatusOffline)
+		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
+				h.logErr("failed to update status to offline", updateErr, "id", id)
+			}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  fmt.Sprintf("parse ping result: %v", err),
@@ -839,7 +918,9 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if pr.Status != "online" {
-		_ = h.svc.UpdateStatus(writeCtx, id, model.StatusOffline)
+		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
+				h.logErr("failed to update status to offline", updateErr, "id", id)
+			}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  pr.Error,

@@ -838,6 +838,10 @@ func main() {
 		os.Exit(1)
 	}
 	databaseHandler.SetCredentialStore(dbCredStore)
+	databaseHandler.SetAuthz(authzMW)
+	databaseHandler.SetLogger(log.With(slog.String("comp", "db-handler")))
+	databaseHandler.SetAuthz(authzMW)
+	databaseHandler.SetLogger(log.With(slog.String("comp", "db-handler")))
 
 	// Data plane auth verify — nginx auth_request
 	// calls this endpoint to validate edge basic-auth before proxy_pass'ing
