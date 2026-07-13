@@ -3420,7 +3420,7 @@ func ongridBasePrompt() string {
 	| 数据库 / SQL / 慢查询 / 连接 / 死锁 / 锁等待 / 复制 / 索引 / 主从 / 表空间 / ORA- | ` + bt + `specialist-database` + bt + ` |
 	| 已知 incident_id 要做端到端诊断 | ` + bt + `incident-investigator` + bt + ` |
 
-	**正例（单域也必须派，不是只有跨域才派）：**
+		**使用示例（命中关键词即派，单域也不例外）：**
 	- "看下 CPU 和内存占用，找最吃资源的进程" → ` + bt + `AgentTool(subagent_type="specialist-compute")` + bt + `
 	- "ongrid-edge 服务现在状态怎样？最近有没有重启过？" → ` + bt + `AgentTool(subagent_type="specialist-ops")` + bt + `
 	- "整个集群最近 1 小时的健康度怎么样？" → ` + bt + `AgentTool(subagent_type="specialist-sre")` + bt + `
@@ -3449,7 +3449,7 @@ func ongridBasePrompt() string {
 	- ` + bt + `query_logql` + bt + ` 同一用户问题最多 2 次，` + bt + `query_traceql/host_bash` + bt + ` 最多各 3 次；达到上限后必须基于已有结果回答，不能换表达式继续试。工具返回 ` + bt + `call_budget_exceeded` + bt + ` 时，下一条 assistant message 必须是最终答复，禁止再发任何 tool_call。
 	- 工具结果是事实；主要 cpu/mem/load/disk 正常时说"未发现明显异常"，不要硬翻日志/trace。
 	- 优先结构化工具：设备快照用 ` + bt + `get_edge_summary/get_host_load/get_host_processes` + bt + `，fleet 排名/离群用 ` + bt + `rank_edges/find_outlier_edges` + bt + `，文件体积/du/stat 用 host_files 专用工具；诊断告警用 ` + bt + `correlate_incident` + bt + `，诊断单台主机用 ` + bt + `get_edge_summary` + bt + `。只有结构化工具不覆盖时才手写 PromQL/LogQL/TraceQL。
-	- ` + bt + `query_logql` + bt + ` 查日志内容，不查文件名/metric/device 列表；OOM/killed/panic/error 这类关键词日志最多用 1-2 个宽查询表达式，不要按 label 反复试探。日志为空时直接说明缺少可查询 label，不要转 ` + bt + `host_bash` + bt + `。
+	- ` + bt + `query_logql` + bt + ` 查日志内容，不查文件名/metric/device 列表；OOM/killed/panic/error 这类关键词日志最多用 1-2 个宽查询表达式，不要按 label 反复试探。日志为空时直接说明缺少可查询 label，不要转 ` + bt + `host_bash` + bt + `。` + bt + `query_promql` + bt + ` 查时序；` + bt + `query_traceql` + bt + ` 查链路/span/trace_id/慢调用/错误调用。不要为了确认数据源存在先查设备或拓扑；工具失败时再说明配置缺口。
 	- 源码搜索问题：用户说搜索/grep/定位函数/报错串时，最终必须调用 ` + bt + `grep_source` + bt + `；仓库 ref 不明确时优先用 ` + bt + `repo="ongrid"` + bt + `，不要停在 ` + bt + `list_repo_sources` + bt + `。做逻辑探查：定位到一段代码后，顺着调用的函数 / 引用的类型 / 报错分支继续 grep+read 逐层跟读。
 	- 数据库健康/连接/慢查询/复制/错误摘要直接用 ` + bt + `analyze_database_status` + bt + `，不能只停在 ` + bt + `list_database_sources` + bt + `。变更事件/发布事件/审计变更是实时数据查询，必须调用 ` + bt + `query_change_events` + bt + `。
 	- PromQL selector 只能贴在每个 metric 后：` + bt + `node_memory_SwapTotal_bytes{device_id="1"}` + bt + `；不能贴在表达式末尾。多设备/多挂载点 PromQL 必须用单个聚合表达式（` + bt + `sum/topk by(device_id,mountpoint,fstype)` + bt + `），不要按 device/metric/mountpoint 拆多次调用。
@@ -3459,7 +3459,7 @@ func ongridBasePrompt() string {
 
 	- KB 优先回答 runbook / how-to / playbook / 部署步骤 / 制度流程类问题；命中（top score ≥ 0.6）就按 KB 回答并标注 ` + bt + `（参考 KB: <title>）` + bt + `；同主题不重复查。query 用自然语言整句即可（不必拆词，向量检索喜欢完整语义）。
 	- 用户给了实时对象或数据源标识（incident/device/edge/service/metric/log/trace/span/id/时间窗等）时，先用对应注册工具；不确定用 ` + bt + `ToolSearch` + bt + ` 发现工具，不要先查 KB。
-	- 创建告警规则例外：不查 KB/代码，不调 list_database_sources。指标告警先 ` + bt + `list_metric_catalog` + bt + ` 一次，必要时 ` + bt + `analyze_database_status` + bt + ` 一次；catalog 有可用指标后再 ` + bt + `draft_config_change` + bt + `，catalog 为空/不可用时停止说明缺失。` + bt + `config_validation_failed` + bt + ` 时按 validation.issues 修复并重试。禁止只输出文字草案；只有拿到 ` + bt + `config_draft/draft_hash` + bt + ` 才能让用户确认；确认后只用原始 payload/draft_hash 调 ` + bt + `apply_config_change` + bt + `。
+	- 创建告警规则例外：不查 KB/代码，不调 list_database_sources。指标告警先 ` + bt + `list_metric_catalog` + bt + ` 一次，必要时 ` + bt + `analyze_database_status` + bt + ` 一次；catalog 有可用指标后再 ` + bt + `draft_config_change` + bt + `，catalog 为空/不可用时停止说明缺失。` + bt + `config_validation_failed` + bt + ` 时按 validation.issues 修复并重试。禁止只输出文字草案；只有拿到 ` + bt + `config_draft/draft_hash` + bt + ` 才能让用户确认；确认后只用原始 payload/draft_hash 调 ` + bt + `apply_config_change` + bt + `。具体 rule kind 与表达式规范交给工具 schema 和后端 compiler。
 
 	## 云端执行
 
