@@ -16,10 +16,19 @@ func Migrate(db *gorm.DB) error {
 	_ = db.Migrator().DropIndex(&model.DatabaseInstance{}, "uk_edge_name")
 	_ = db.Migrator().DropIndex(&model.DatabaseInstance{}, "idx_database_instances_edge_id_name")
 
-	// Phase 2: let AutoMigrate create new columns (source_id, plugin_type)
-	// and the new unique index (edge_id, source_id).
-	if err := db.AutoMigrate(&model.DatabaseInstance{}); err != nil {
-		return err
+	// Phase 2: ensure the new columns (source_id, plugin_type) exist BEFORE
+	// the backfill, so we can write into them. We must NOT run AutoMigrate
+	// here because it would also create the unique index uk_edge_source,
+	// which would fail if any edge has multiple rows with source_id=''.
+	if !db.Migrator().HasColumn(&model.DatabaseInstance{}, "source_id") {
+		if err := db.Migrator().AddColumn(&model.DatabaseInstance{}, "SourceID"); err != nil {
+			return err
+		}
+	}
+	if !db.Migrator().HasColumn(&model.DatabaseInstance{}, "plugin_type") {
+		if err := db.Migrator().AddColumn(&model.DatabaseInstance{}, "PluginType"); err != nil {
+			return err
+		}
 	}
 
 	// Phase 3: backfill source_id = name for existing rows that have an
@@ -27,5 +36,8 @@ func Migrate(db *gorm.DB) error {
 	// for rows created before the migration.
 	_ = db.Exec(`UPDATE database_instances SET source_id = name WHERE source_id = '' AND name != ''`).Error
 
-	return nil
+	// Phase 4: let AutoMigrate create the new unique index (edge_id, source_id).
+	// At this point source_id is populated for all existing rows, so no
+	// duplicate-key collisions should occur.
+	return db.AutoMigrate(&model.DatabaseInstance{})
 }

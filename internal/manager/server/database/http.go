@@ -1,4 +1,4 @@
-// Package database builds the HTTP routes for database instance management.
+﻿// Package database builds the HTTP routes for database instance management.
 //
 // The Handler assumes the caller-wide auth middleware (internal/pkg/auth)
 // has already populated the request context with the authenticated user.
@@ -96,30 +96,11 @@ func (h *Handler) SetAuthz(a AuthzMW) { h.authz = a }
 // SetLogger wires an optional logger for structured error logging.
 func (h *Handler) SetLogger(l *slog.Logger) { h.logger = l }
 
-// writeMW returns a Casbin middleware requiring "write" on obj, or a
-// no-op passthrough when authz is not wired.
-func (h *Handler) writeMW(obj string) func(http.Handler) http.Handler {
+// requireMW returns a Casbin middleware requiring `act` permission on `obj`,
+// or a no-op passthrough when authz is not wired.
+func (h *Handler) requireMW(obj, act string) func(http.Handler) http.Handler {
 	if h.authz != nil {
-		return h.authz.Require(obj, "write")
-	}
-	return func(next http.Handler) http.Handler { return next }
-}
-
-// deleteMW returns a Casbin middleware requiring "delete" on obj, or a
-// no-op passthrough when authz is not wired.
-func (h *Handler) deleteMW(obj string) func(http.Handler) http.Handler {
-	if h.authz != nil {
-		return h.authz.Require(obj, "delete")
-	}
-	return func(next http.Handler) http.Handler { return next }
-}
-
-// execMW returns a Casbin middleware requiring "exec" on obj, or a
-// no-op passthrough when authz is not wired. Used for probe and
-// slow-query endpoints that change state or resolve credentials.
-func (h *Handler) execMW(obj string) func(http.Handler) http.Handler {
-	if h.authz != nil {
-		return h.authz.Require(obj, "exec")
+		return h.authz.Require(obj, act)
 	}
 	return func(next http.Handler) http.Handler { return next }
 }
@@ -127,23 +108,23 @@ func (h *Handler) execMW(obj string) func(http.Handler) http.Handler {
 // Register attaches routes to the given chi router (typically the protected
 // /api group in cmd/ongrid/main.go).
 //
-//	GET    /v1/databases          — list (read)
-//	POST   /v1/databases          — create (write)
-//	GET    /v1/databases/{id}     — get (read)
-//	PUT    /v1/databases/{id}     — update (write)
-//	DELETE /v1/databases/{id}     — delete (delete)
-//	POST   /v1/databases/{id}/slow-queries — slow query analysis (exec)
-//	POST   /v1/databases/{id}/probe        — connectivity probe (exec)
+//	get —   /v1/databases          �?list —(read)
+//	POST   /v1/databases          �?create —(write)
+//	get —   /v1/databases/{id}     �?get —(read)
+//	PUT    /v1/databases/{id}     �?update —(write)
+//	delete —/v1/databases/{id}     �?delete —(delete)
+//	POST   /v1/databases/{id}/slow-queries �?slow query analysis —(exec)
+//	POST   /v1/databases/{id}/probe        �?connectivity probe —(exec)
 //
 // @Summary Database instance management API
 func (h *Handler) Register(r chi.Router) {
-	r.Get("/v1/databases", h.list)                                                    // read — public for authed users
-	r.With(h.writeMW("database:*")).Post("/v1/databases", h.create)                   // write
-	r.Get("/v1/databases/{id}", h.get)                                                // read — public for authed users
-	r.With(h.writeMW("database:*")).Put("/v1/databases/{id}", h.update)               // write
-	r.With(h.deleteMW("database:*")).Delete("/v1/databases/{id}", h.delete)           // delete
-	r.With(h.execMW("database:credential")).Post("/v1/databases/{id}/slow-queries", h.slowQueries) // exec
-	r.With(h.execMW("database:credential")).Post("/v1/databases/{id}/probe", h.probe) // exec
+	r.With(h.requireMW("database:*", "read")).Get("/v1/databases", h.list)             // read
+	r.With(h.requireMW("database:*", "write")).Post("/v1/databases", h.create)        // write
+	r.With(h.requireMW("database:*", "read")).Get("/v1/databases/{id}", h.get)        // read
+	r.With(h.requireMW("database:*", "write")).Put("/v1/databases/{id}", h.update)    // write
+	r.With(h.requireMW("database:*", "delete")).Delete("/v1/databases/{id}", h.delete) // delete
+	r.With(h.requireMW("database:credential", "exec")).Post("/v1/databases/{id}/slow-queries", h.slowQueries) // exec
+	r.With(h.requireMW("database:credential", "exec")).Post("/v1/databases/{id}/probe", h.probe)               // exec
 }
 
 // --- request / response DTOs ---
@@ -187,7 +168,7 @@ type instanceResponse struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
-// listResp is the JSON envelope for list endpoints.
+// listResp is the JSON envelope for list —endpoints.
 type listResp struct {
 	Items []instanceResponse `json:"items"`
 	Total int                `json:"total"`
@@ -219,7 +200,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
-	if req.Name == "" || req.DBType == "" || req.Host == "" {
+	if req.Name == "" || req.DBType == "" || req.Host == "" || req.Port <= 0 || req.Port > 65535 {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
@@ -315,7 +296,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
-	if req.Name == "" || req.Host == "" {
+	if req.Name == "" || req.Host == "" || req.Port <= 0 || req.Port > 65535 {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
@@ -367,20 +348,24 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := h.svc.Delete(r.Context(), id); err != nil {
-		writeErr(w, err)
-		return
-	}
+	// Topology cleanup first �?if this fails the DB row is still intact,
+	// so the client can safely retry the entire delete —operation.
 	if h.topo != nil {
 		if err := h.topo.RemoveDBInstance(r.Context(), inst); err != nil {
 			writeErr(w, err)
 			return
 		}
 	}
+	// Credential cleanup (best-effort �?errors are logged, not fatal).
 	if h.credDB != nil {
 		if err := h.credDB.Delete(r.Context(), id); err != nil {
-			h.logErr("credential delete failed", err, "id", id)
+			h.logErr("credential delete —failed", err, "id", id)
 		}
+	}
+	// Finally, delete —the DB row.
+	if err := h.svc.Delete(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -499,40 +484,38 @@ func (h *Handler) slowQueries(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errs.ErrInvalid)
 		return
 	}
-	// Resolve credentials from the credential store when not provided,
-	// or store them for future use when they are provided.
+	// Resolve missing credentials from the credential store.
+	// Fill individual missing fields rather than overwriting both, so that
+	// partial credential updates (e.g. a new user with stored password) are
+	// preserved �?consistent with the probe handler's behavior.
 	if (req.User == "" || req.Password == "") && h.credDB != nil {
-		user, pass, found, err := h.credDB.Get(r.Context(), id)
+		storedUser, storedPass, found, err := h.credDB.Get(r.Context(), id)
 		if err == nil && found {
-			req.User = user
-			req.Password = pass
+			if req.User == "" {
+				req.User = storedUser
+		}
+			if req.Password == "" {
+				req.Password = storedPass
+		}
 		}
 	}
 	if req.User == "" || req.Password == "" {
 		writeErr(w, errors.New("user and password are required"))
 		return
 	}
-	// Store credentials for future use (AI query_database, next slow query).
-	if h.credDB != nil {
-		if err := h.credDB.Set(r.Context(), id, req.User, req.Password); err != nil {
-				h.logErr("credential store failed", err, "id", id)
-			}
-		}
-	if req.Limit <= 0 {
-		req.Limit = 50
-	}
-	if req.Limit > 200 {
-		req.Limit = 200
-	}
-	if req.MinDurationMs <= 0 {
-		req.MinDurationMs = 100 // default 100ms
-	}
 
-	// Fetch instance to get edge_id, db_type, host, port.
+	// Fetch instance to get —edge_id, db_type, host, port.
 	inst, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
 		return
+	}
+
+	// Store credentials for future use (AI query_database, next slow query).
+	if h.credDB != nil {
+		if err := h.credDB.Set(r.Context(), id, req.User, req.Password); err != nil {
+			h.logErr("credential store failed", err, "id", id)
+		}
 	}
 
 	// Build the slow-query SQL for this db_type.
@@ -703,11 +686,11 @@ func parseSlowQueryRows(dbType string, raw json.RawMessage, limit int, hasPerfSc
 			if v, ok := row["has_no_index_used"]; ok {
 				b := boolOrZero(v)
 				sr.HasNoIndexUsed = &b
-			}
+		}
 			if v, ok := row["has_no_good_index"]; ok {
 				b := boolOrZero(v)
 				sr.HasNoGoodIndex = &b
-			}
+		}
 		case "postgresql":
 			sr.TotalRows = int64OrZero(row["total_rows"])
 			sr.CacheHitPct = float64OrZero(row["cache_hit_pct"])
@@ -786,7 +769,7 @@ func isValidDBType(dbType string) bool {
 }
 
 func (h *Handler) logErr(msg string, err error, args ...any) {
-	if h.logger != nil {
+	if h.logger != nil && err != nil {
 		h.logger.Error(msg, append([]any{slog.String("error", err.Error())}, args...)...)
 	}
 }
@@ -859,10 +842,10 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		if err == nil && found {
 			if req.User == "" {
 				req.User = storedUser
-			}
+		}
 			if req.Password == "" {
 				req.Password = storedPass
-			}
+		}
 		}
 	}
 
@@ -888,8 +871,8 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
-				h.logErr("failed to update status to offline", updateErr, "id", id)
-			}
+			h.logErr("failed to update —status to offline", updateErr, "id", id)
+		}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  err.Error(),
@@ -903,8 +886,8 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
-				h.logErr("failed to update status to offline", updateErr, "id", id)
-			}
+			h.logErr("failed to update —status to offline", updateErr, "id", id)
+		}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  fmt.Sprintf("parse ping result: %v", err),
@@ -919,8 +902,8 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 
 	if pr.Status != "online" {
 		if updateErr := h.svc.UpdateStatus(writeCtx, id, model.StatusOffline); updateErr != nil {
-				h.logErr("failed to update status to offline", updateErr, "id", id)
-			}
+			h.logErr("failed to update —status to offline", updateErr, "id", id)
+		}
 		writeJSON(w, http.StatusOK, probeResponse{
 			Status: model.StatusOffline,
 			Error:  pr.Error,
@@ -928,7 +911,7 @@ func (h *Handler) probe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update instance status and version.
+	// update —instance status and version.
 	version := pr.Version
 	if version != "" {
 		inst.Version = version

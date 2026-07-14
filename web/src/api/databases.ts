@@ -68,6 +68,11 @@ export type ListDBParams = {
   offset?: number;
 };
 
+export type ListDBResponse = {
+  items: DatabaseInstance[];
+  total: number;
+};
+
 export function listDatabases(params?: ListDBParams) {
   const qs = new URLSearchParams();
   if (params?.db_type) qs.set('db_type', params.db_type);
@@ -77,7 +82,7 @@ export function listDatabases(params?: ListDBParams) {
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.offset) qs.set('offset', String(params.offset));
   const query = qs.toString();
-  return request<DatabaseInstance[]>('GET', `/databases${query ? `?${query}` : ''}`);
+  return request<ListDBResponse>('GET', `/databases${query ? `?${query}` : ''}`);
 }
 
 export function getDatabase(id: string | number) {

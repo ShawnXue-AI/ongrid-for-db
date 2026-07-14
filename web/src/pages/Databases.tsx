@@ -69,7 +69,7 @@ export default function DatabasesPage() {
       setLoading(true);
       const r = await listDatabases(filterType ? { db_type: filterType } : undefined);
       if (!mountedRef.current) return;
-      let items = r ?? [];
+      let items = r?.items ?? [];
       if (filterType) {
         items = items.filter((d) => d.db_type === filterType);
       }

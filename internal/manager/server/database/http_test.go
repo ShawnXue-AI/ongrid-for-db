@@ -89,15 +89,15 @@ func (s *fakeService) Delete(_ context.Context, id uint64) error {
 	return nil
 }
 
-// fakeAuthzMW implements AuthzMW for handler tests.
+// fakeAuthzMW implements AuthzMW for handler tests with per-action granularity.
 type fakeAuthzMW struct {
-	allowAll bool
+	permittedActions map[string]bool // e.g. {"read":true, "write":true}
 }
 
 func (a *fakeAuthzMW) Require(obj, act string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !a.allowAll {
+			if !a.permittedActions[act] {
 				http.Error(w, errs.ErrForbidden.Error(), http.StatusForbidden)
 				return
 			}
@@ -116,10 +116,18 @@ func authContext(r *http.Request) *http.Request {
 }
 
 // setupHandler creates a handler with a fake service, attached to a chi router.
-func setupHandler(t *testing.T, svc *fakeService, allowWrite bool) *chi.Mux {
+// When permittedActions are given, only those actions are allowed via fakeAuthzMW.
+// When called with no args, authz is nil (passthrough — no auth enforcement).
+func setupHandler(t *testing.T, svc *fakeService, permittedActions ...string) *chi.Mux {
 	t.Helper()
 	h := NewHandler(svc)
-	h.SetAuthz(&fakeAuthzMW{allowAll: allowWrite})
+	if len(permittedActions) > 0 {
+		actions := make(map[string]bool, len(permittedActions))
+		for _, a := range permittedActions {
+			actions[a] = true
+		}
+		h.SetAuthz(&fakeAuthzMW{permittedActions: actions})
+	}
 	mux := chi.NewRouter()
 	h.Register(mux)
 	return mux
@@ -138,7 +146,7 @@ func TestListDatabases(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(t1, t2)
-	mux := setupHandler(t, svc, false)
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("GET", "/v1/databases", nil)
 	req = authContext(req)
@@ -162,7 +170,7 @@ func TestListDatabases(t *testing.T) {
 
 func TestListDatabasesEmpty(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, false)
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("GET", "/v1/databases", nil)
 	req = authContext(req)
@@ -192,7 +200,7 @@ func TestGetDatabase(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(inst)
-	mux := setupHandler(t, svc, false)
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("GET", "/v1/databases/1", nil)
 	req = authContext(req)
@@ -216,7 +224,7 @@ func TestGetDatabase(t *testing.T) {
 
 func TestGetDatabaseNotFound(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, false)
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("GET", "/v1/databases/999", nil)
 	req = authContext(req)
@@ -230,7 +238,7 @@ func TestGetDatabaseNotFound(t *testing.T) {
 
 func TestCreateDatabase(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, true) // authz allows write
+	mux := setupHandler(t, svc, "write")
 
 	body := `{"edge_id":1,"name":"new-db","db_type":"mysql","host":"10.0.0.3","port":3306}`
 	req := httptest.NewRequest("POST", "/v1/databases", strings.NewReader(body))
@@ -258,7 +266,8 @@ func TestCreateDatabase(t *testing.T) {
 
 func TestCreateDatabaseForbidden(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, false) // authz denies write
+	// Only "read" permitted — POST requires "write", so this returns 403.
+	mux := setupHandler(t, svc, "read")
 
 	body := `{"edge_id":1,"name":"new-db","db_type":"mysql","host":"10.0.0.3","port":3306}`
 	req := httptest.NewRequest("POST", "/v1/databases", strings.NewReader(body))
@@ -273,7 +282,7 @@ func TestCreateDatabaseForbidden(t *testing.T) {
 
 func TestCreateDatabaseInvalidBody(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "write")
 
 	// Missing required fields (name, db_type, host)
 	body := `{"edge_id":1}`
@@ -289,7 +298,7 @@ func TestCreateDatabaseInvalidBody(t *testing.T) {
 
 func TestCreateDatabaseUnsupportedType(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "write")
 
 	body := `{"edge_id":1,"name":"bad-db","db_type":"oracle","host":"10.0.0.4","port":1521}`
 	req := httptest.NewRequest("POST", "/v1/databases", strings.NewReader(body))
@@ -311,7 +320,7 @@ func TestUpdateDatabase(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(inst)
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "write")
 
 	body := `{"name":"new-name","host":"10.0.0.1","port":3306}`
 	req := httptest.NewRequest("PUT", "/v1/databases/1", strings.NewReader(body))
@@ -333,7 +342,7 @@ func TestUpdateDatabase(t *testing.T) {
 
 func TestUpdateDatabaseNotFound(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "write")
 
 	body := `{"name":"nobody","host":"10.0.0.9","port":3306}`
 	req := httptest.NewRequest("PUT", "/v1/databases/999", strings.NewReader(body))
@@ -354,7 +363,8 @@ func TestUpdateDatabaseForbidden(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(inst)
-	mux := setupHandler(t, svc, false) // authz denies write
+	// Only "read" permitted — PUT requires "write", so this returns 403.
+	mux := setupHandler(t, svc, "read")
 
 	body := `{"name":"new-name","host":"10.0.0.1","port":3306}`
 	req := httptest.NewRequest("PUT", "/v1/databases/1", strings.NewReader(body))
@@ -375,7 +385,7 @@ func TestDeleteDatabase(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(inst)
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "delete", "read") // delete for the delete, read for the verify-get
 
 	req := httptest.NewRequest("DELETE", "/v1/databases/1", nil)
 	req = authContext(req)
@@ -398,7 +408,7 @@ func TestDeleteDatabase(t *testing.T) {
 
 func TestDeleteDatabaseNotFound(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, true)
+	mux := setupHandler(t, svc, "delete")
 
 	req := httptest.NewRequest("DELETE", "/v1/databases/999", nil)
 	req = authContext(req)
@@ -418,7 +428,8 @@ func TestDeleteDatabaseForbidden(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	svc := newFakeService(inst)
-	mux := setupHandler(t, svc, false) // authz denies delete
+	// Only "read" permitted — DELETE requires "delete", so this returns 403.
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("DELETE", "/v1/databases/1", nil)
 	req = authContext(req)
@@ -432,7 +443,7 @@ func TestDeleteDatabaseForbidden(t *testing.T) {
 
 func TestGetDatabaseInvalidID(t *testing.T) {
 	svc := newFakeService()
-	mux := setupHandler(t, svc, false)
+	mux := setupHandler(t, svc, "read")
 
 	req := httptest.NewRequest("GET", "/v1/databases/abc", nil)
 	req = authContext(req)
@@ -445,4 +456,3 @@ func TestGetDatabaseInvalidID(t *testing.T) {
 }
 
 // --- helpers ---
-

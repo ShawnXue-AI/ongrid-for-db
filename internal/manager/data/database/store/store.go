@@ -152,6 +152,13 @@ func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID,
 		err = r.db.WithContext(ctx).
 			Where("edge_id = ? AND source_id = ?", edgeID, sourceID).
 			First(&existing).Error
+		// Fall back to (edge_id, name) when source_id lookup misses.
+		// This covers manually-created rows that haven't been backfilled yet.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			err = r.db.WithContext(ctx).
+				Where("edge_id = ? AND name = ?", edgeID, name).
+				First(&existing).Error
+		}
 	} else {
 		err = r.db.WithContext(ctx).
 			Where("edge_id = ? AND name = ?", edgeID, name).
@@ -159,7 +166,9 @@ func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID,
 	}
 
 	if err == nil {
-		// Update existing.
+		// Update existing — includes source_id and plugin_type so that
+		// rows matched via the name fallback get their identity fields
+		// populated and graduate to the efficient source_id lookup path.
 		updates := map[string]any{}
 		if host != "" {
 			updates["host"] = host
@@ -175,6 +184,12 @@ func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID,
 		}
 		if configJSON != "" {
 			updates["config_json"] = configJSON
+		}
+		if sourceID != "" {
+			updates["source_id"] = sourceID
+		}
+		if pluginType != "" {
+			updates["plugin_type"] = pluginType
 		}
 		if len(updates) > 0 {
 			return r.db.WithContext(ctx).Model(&model.DatabaseInstance{}).
@@ -195,6 +210,8 @@ func (r *Repo) UpsertFromDiscovery(ctx context.Context, edgeID uint64, sourceID,
 	}
 	return r.db.WithContext(ctx).Create(&model.DatabaseInstance{
 		EdgeID:     edgeID,
+		SourceID:   sourceID,
+		PluginType: pluginType,
 		Name:       name,
 		DBType:     dbType,
 		Host:       host,
